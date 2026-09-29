@@ -108,16 +108,16 @@ qualityDb.exec(`
   CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
   INSERT INTO meta(key,value) VALUES ('complete','1');
   INSERT INTO meta(key,value) VALUES ('taxonomy_scope','Eukaryota');
-  INSERT INTO meta(key,value) VALUES ('resolver_version','v7-wikipedia-commons-metadata-batch');
+  INSERT INTO meta(key,value) VALUES ('resolver_version','v8-normalized-file-attribution');
   CREATE TABLE card_quality(
     taxon_id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     resolver_version TEXT
   );
   INSERT INTO card_quality(taxon_id,status,resolver_version)
-    VALUES ('game-species','READY','v7-wikipedia-commons-metadata-batch');
+    VALUES ('game-species','READY','v8-normalized-file-attribution');
   INSERT INTO card_quality(taxon_id,status,resolver_version)
-    VALUES ('game-unready','REVIEW','v7-wikipedia-commons-metadata-batch');
+    VALUES ('game-unready','REVIEW','v8-normalized-file-attribution');
   CREATE TABLE ready_drop_pool(
     rarity TEXT NOT NULL,
     slot INTEGER NOT NULL,
