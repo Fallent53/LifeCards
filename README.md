@@ -69,14 +69,22 @@ Card detail views resolve Wikipedia summaries, Wikidata entity IDs and NCBI Taxo
 
 LifeCards uses the public Catalogue of Life / ChecklistBank API as a live taxonomy fallback, so Tree search and Codex search can reach the large catalogue without committing millions of records to Git.
 
-For a fast, reproducible and offline scientific snapshot, build the local Animalia database:
+For a fast, reproducible and offline scientific snapshot, build the local Eukaryota database:
 
 ```bash
 npm install
 npm run sync:col
 ```
 
-This downloads a pinned Catalogue of Life Extended Release from ChecklistBank, keeps accepted **Animalia** taxa, imports the hierarchy into `data/animalia.sqlite`, adds direct-child counts, and imports preferred vernacular names when the DwCA release provides them.
+`sync:col` now targets **Eukaryota** by default: animals, plants, fungi and the other eukaryotic kingdoms in the CoL snapshot. Every accepted taxon rank is retained as a collectible definition, including intermediate/unranked accepted nodes.
+
+For the older Animalia-only development database:
+
+```bash
+npm run sync:animalia
+```
+
+This downloads a pinned Catalogue of Life Extended Release from ChecklistBank, keeps accepted **Eukaryota** taxa, imports the hierarchy into `data/eukaryota.sqlite`, adds direct-child counts, and imports preferred vernacular names when the DwCA release provides them.
 
 After the import, restart LifeCards:
 
@@ -86,7 +94,7 @@ npm start
 
 The Tree of Life and Codex automatically prefer the local CoL database when present; otherwise they use ChecklistBank live, and only fall back to the tiny seed catalog if the external service is unavailable. The UI never tries to render millions of nodes simultaneously: it loads a bounded radial subtree around the branch being explored.
 
-To make the **Tree of Life** use the complete catalogue while keeping gameplay drops centered on Animalia:
+To make the **Tree of Life** use the complete catalogue while keeping gameplay drops centered on Eukaryota:
 
 ```bash
 npm run sync:map
@@ -94,7 +102,7 @@ npm run sync:map
 
 This reuses the same cached Catalogue of Life DwCA archive, writes a separate `data/life.sqlite`, and skips drop-pool generation. LifeCards then uses:
 
-- `data/animalia.sqlite` for pack/drop selection;
+- `data/eukaryota.sqlite` for pack/drop selection;
 - `data/life.sqlite` for Tree of Life search and cartography.
 
 If `life.sqlite` is absent, the map transparently falls back to `animalia.sqlite`. This separation prevents a full-life scientific map from flooding normal packs with every microbial species in the catalogue.
@@ -181,7 +189,7 @@ npm install
 npm run sync:col
 ```
 
-This imports the Catalogue of Life Animalia snapshot into `data/animalia.sqlite`, builds local indexes plus an FTS5 search index, and precomputes direct-child counts. By default it downloads the official **latest Base Release DwCA** once and keeps the archive locally, so rebuilding the SQLite indexes does not repeatedly consume hundreds of MB of bandwidth. Use `npm run sync:col -- --refresh` when you intentionally want a newer upstream snapshot. The radial tree then reads only the visible subtree from SQLite.
+This imports the Catalogue of Life Eukaryota snapshot into `data/eukaryota.sqlite`, builds local indexes plus an FTS5 search index, and precomputes direct-child counts. By default it downloads the official **latest Base Release DwCA** once and keeps the archive locally, so rebuilding the SQLite indexes does not repeatedly consume hundreds of MB of bandwidth. Use `npm run sync:col -- --refresh` when you intentionally want a newer upstream snapshot. The radial tree then reads only the visible subtree from SQLite.
 
 After changes to the importer/search schema, rerun `npm run sync:col` to rebuild the local taxonomy database.
 
@@ -202,6 +210,6 @@ This is intentional: prefetching media for millions of species would be slow, wa
 
 ### Separate gameplay and map taxonomies
 
-`LIFECARDS_TAXONOMY_DB` controls the taxonomy used by collectible drop pools. The default is `data/animalia.sqlite`.
+`LIFECARDS_TAXONOMY_DB` controls the taxonomy used by collectible drop pools. The default is `data/eukaryota.sqlite`.
 
 `LIFECARDS_MAP_TAXONOMY_DB` controls the optional larger taxonomy used by Tree of Life navigation. The default is `data/life.sqlite`. If that file does not exist or is on an old schema, LifeCards automatically uses the gameplay taxonomy instead.
