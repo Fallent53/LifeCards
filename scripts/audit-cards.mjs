@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v12-strict-real-media";
+const AUDIT_RESOLVER_VERSION="v13-all-real-media-fallbacks";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -384,6 +384,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
   const entries=chunk.map((row)=>({
     id:String(row.id),
     query:cleanAuditQuery(row),
+    rank:String(row.rank||""),
   }));
 
   let resolved={};
