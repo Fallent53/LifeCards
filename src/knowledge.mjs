@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v7";
@@ -455,7 +455,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   const wikipediaFileMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
 
   const unresolvedAttribution=pageImages.filter((name)=>{
-    const media=wikipediaFileMetadata[lowerKey(name)]||null;
+    const media=wikipediaFileMetadata[normalizeMediaFileKey(name)]||null;
     return !hasCompleteAttribution(media);
   });
 
@@ -481,7 +481,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
 
     let media=null;
     if(page?.pageimage){
-      const key=lowerKey(page.pageimage);
+      const key=normalizeMediaFileKey(page.pageimage);
       const local=wikipediaFileMetadata[key]||null;
       const commons=commonsFileMetadata[key]||null;
 
