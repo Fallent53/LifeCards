@@ -170,6 +170,7 @@ export class RadialTreeMap {
     const view = Math.max(900, extent * 2 + 360);
 
     const visibleSpecies = Number(payload.root.descendantSpeciesCount || 0);
+    const hiddenBranches = Number(payload.root.truncatedChildren || payload.root.truncated || 0);
     const ownedCount = model.nodes.filter((entry) => this.options.isOwned?.(entry.node)).length;
     const explorableCount = model.nodes.filter((entry) => isExplorable(entry.node)).length;
 
@@ -255,6 +256,7 @@ export class RadialTreeMap {
           <button data-radial-action="up" title="Parent branch">↑</button>
           <button data-radial-action="home" title="Back to LUCA">◎</button>
           <button data-radial-action="fit" title="Fit map">⌾</button>
+          ${hiddenBranches ? `<button class="atlas-more" data-radial-action="more" title="Load more direct branches">+${fmt(hiddenBranches)}</button>` : ""}
           <button data-radial-action="out" title="Zoom out">−</button>
           <button data-radial-action="in" title="Zoom in">+</button>
           <button data-radial-action="fullscreen" title="Fullscreen">⛶</button>
@@ -374,64 +376,81 @@ export class RadialTreeMap {
 
   wire(nodes, byId) {
     const lookup = byId || new Map(nodes.map((entry) => [String(entry.node.id), entry]));
+    const viewport = this.container.querySelector(".atlas-viewport");
 
-    const interactive = this.container.querySelectorAll("[data-radial-id],[data-atlas-sector]");
-    interactive.forEach((element) => {
+    const entryFromTarget = (target) => {
+      const element = target?.closest?.("[data-radial-id],[data-atlas-sector]");
+      if (!element || !this.container.contains(element)) return null;
       const id = String(element.dataset.radialId || element.dataset.atlasSector || "");
       const entry = lookup.get(id);
-      if (!entry) return;
+      return entry ? { entry, element } : null;
+    };
 
-      element.addEventListener("pointerenter", (event) => {
-        this.setInspector(entry.node);
-        this.highlightLineage(entry);
+    this.container.addEventListener("pointerover", (event) => {
+      const hit = entryFromTarget(event.target);
+      if (!hit) return;
+      const previous = entryFromTarget(event.relatedTarget);
+      if (previous?.entry === hit.entry) return;
 
-        if (!this.tooltip) return;
-        const speciesCount = Number(entry.node.descendantSpeciesCount || 0);
-        const directChildren = Number(entry.node.childCount || 0);
-        this.tooltip.innerHTML = `
-          <b>${escapeHtml(entry.node.commonName || entry.node.scientificName)}</b>
-          <em>${escapeHtml(entry.node.scientificName || "")}</em>
-          <span>${escapeHtml(entry.node.rank || entry.node.kind || "")}
-            ${speciesCount ? ` · ${fmt(speciesCount)} species` : ""}
-            ${directChildren ? ` · ${fmt(directChildren)} branches` : ""}
-          </span>`;
-        this.tooltip.classList.add("visible");
-        this.moveTooltip(event);
-      });
+      this.setInspector(hit.entry.node);
+      this.highlightLineage(hit.entry);
 
-      element.addEventListener("pointermove", (event) => this.moveTooltip(event));
-      element.addEventListener("pointerleave", () => {
-        this.tooltip?.classList.remove("visible");
-        this.clearHighlight();
-      });
-
-      element.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (isExplorable(entry.node) && String(entry.node.id) !== String(this.payload.root.id)) {
-          this.container.classList.add("atlas-diving");
-          this.options.onFocus?.(entry.node);
-        } else {
-          this.options.onSelect?.(entry.node);
-        }
-      });
+      if (!this.tooltip) return;
+      const speciesCount = Number(hit.entry.node.descendantSpeciesCount || 0);
+      const directChildren = Number(hit.entry.node.childCount || 0);
+      this.tooltip.innerHTML = `
+        <b>${escapeHtml(hit.entry.node.commonName || hit.entry.node.scientificName)}</b>
+        <em>${escapeHtml(hit.entry.node.scientificName || "")}</em>
+        <span>${escapeHtml(hit.entry.node.rank || hit.entry.node.kind || "")}
+          ${speciesCount ? ` · ${fmt(speciesCount)} species` : ""}
+          ${directChildren ? ` · ${fmt(directChildren)} branches` : ""}
+        </span>`;
+      this.tooltip.classList.add("visible");
+      this.moveTooltip(event);
     });
 
-    this.container.querySelectorAll("[data-radial-action]").forEach((button) => {
-      button.addEventListener("click", async () => {
-        const action = button.dataset.radialAction;
+    this.container.addEventListener("pointermove", (event) => {
+      if (this.tooltip?.classList.contains("visible")) this.moveTooltip(event);
+    });
+
+    this.container.addEventListener("pointerout", (event) => {
+      const from = entryFromTarget(event.target);
+      if (!from) return;
+      const to = entryFromTarget(event.relatedTarget);
+      if (to?.entry === from.entry) return;
+      this.tooltip?.classList.remove("visible");
+      this.clearHighlight();
+    });
+
+    this.container.addEventListener("click", async (event) => {
+      const actionButton = event.target.closest?.("[data-radial-action]");
+      if (actionButton) {
+        event.stopPropagation();
+        const action = actionButton.dataset.radialAction;
         if (action === "in") this.zoom(1.22);
         if (action === "out") this.zoom(1 / 1.22);
         if (action === "fit") this.reset();
         if (action === "home") this.options.onHome?.();
         if (action === "up") this.options.onUp?.(this.payload);
+        if (action === "more") this.options.onMore?.(this.payload.root);
         if (action === "fullscreen") {
           if (document.fullscreenElement) await document.exitFullscreen?.();
           else await this.container.requestFullscreen?.();
         }
-      });
-    });
+        return;
+      }
 
-    const viewport = this.container.querySelector(".atlas-viewport");
+      const hit = entryFromTarget(event.target);
+      if (!hit) return;
+      event.stopPropagation();
+
+      if (isExplorable(hit.entry.node) && String(hit.entry.node.id) !== String(this.payload.root.id)) {
+        this.container.classList.add("atlas-diving");
+        this.options.onFocus?.(hit.entry.node);
+      } else {
+        this.options.onSelect?.(hit.entry.node);
+      }
+    });
 
     viewport?.addEventListener("wheel", (event) => {
       event.preventDefault();
@@ -498,11 +517,15 @@ export class RadialTreeMap {
         event.preventDefault();
         this.options.onUp?.(this.payload);
       }
+
       const step = 42;
       if (event.key === "ArrowLeft") this.x += step;
-      if (event.key === "ArrowRight") this.x -= step;
-      if (event.key === "ArrowUp") this.y += step;
-      if (event.key === "ArrowDown") this.y -= step;
+      else if (event.key === "ArrowRight") this.x -= step;
+      else if (event.key === "ArrowUp") this.y += step;
+      else if (event.key === "ArrowDown") this.y -= step;
+      else return;
+
+      event.preventDefault();
       this.applyTransform();
     });
   }
