@@ -470,7 +470,10 @@ function hydrateMarketRow(row) {
     id: row.id,
     price: Number(row.price),
     sellerId: row.seller_id,
+    status: row.status || "ACTIVE",
+    buyerId: row.buyer_id || null,
     createdAt: Number(row.created_at),
+    soldAt: row.sold_at == null ? null : Number(row.sold_at),
     card: hydrateCard({
       id: row.card_id,
       owner_id: row.seller_id,
@@ -491,7 +494,7 @@ function hydrateMarketRow(row) {
 
 const MARKET_SELECT = `
   SELECT
-    l.id,l.card_id,l.seller_id,l.price,l.created_at,
+    l.id,l.card_id,l.seller_id,l.price,l.status,l.buyer_id,l.created_at,l.sold_at,
     c.definition_id,c.edition_key,c.serial_number,c.serial_cap,
     c.finish,c.rarity,c.kind,c.definition_json,c.common_name,c.scientific_name,
     c.created_at AS card_created_at
@@ -515,6 +518,8 @@ export function listMarket() {
 }
 
 export function listMarketPage({
+  viewerId = null,
+  scope = "MARKET",
   filter = "ALL",
   query = "",
   sort = "NEWEST",
@@ -525,8 +530,21 @@ export function listMarketPage({
 
   const safeLimit = Math.max(1, Math.min(60, Number(limit) || 24));
   const safeOffset = Math.max(0, Number(offset) || 0);
-  const clauses = ["l.status = 'ACTIVE'"];
+  const normalizedScope = String(scope || "MARKET").toUpperCase();
+  const clauses = [];
   const params = [];
+
+  if (normalizedScope === "MINE") {
+    if (!viewerId) throw new Error("Viewer required for personal listings");
+    clauses.push("l.status = 'ACTIVE'", "l.seller_id = ?");
+    params.push(String(viewerId));
+  } else if (normalizedScope === "HISTORY") {
+    if (!viewerId) throw new Error("Viewer required for market history");
+    clauses.push("l.status IN ('SOLD','CANCELLED')", "(l.seller_id = ? OR l.buyer_id = ?)");
+    params.push(String(viewerId), String(viewerId));
+  } else {
+    clauses.push("l.status = 'ACTIVE'");
+  }
 
   const normalizedFilter = String(filter || "ALL").toUpperCase();
   if (normalizedFilter === "HOLO") clauses.push("c.finish = 'HOLO'");
@@ -547,10 +565,10 @@ export function listMarketPage({
   const normalizedSort = String(sort || "NEWEST").toUpperCase();
   const order =
     normalizedSort === "PRICE_ASC"
-      ? "l.price ASC, l.created_at DESC"
+      ? "l.price ASC, COALESCE(l.sold_at,l.created_at) DESC"
       : normalizedSort === "PRICE_DESC"
-        ? "l.price DESC, l.created_at DESC"
-        : "l.created_at DESC";
+        ? "l.price DESC, COALESCE(l.sold_at,l.created_at) DESC"
+        : "COALESCE(l.sold_at,l.created_at) DESC";
 
   const total = Number(
     db.prepare(
@@ -561,6 +579,12 @@ export function listMarketPage({
   const activeTotal = Number(
     db.prepare("SELECT COUNT(*) AS c FROM listings WHERE status = 'ACTIVE'").get()?.c || 0
   );
+  const myActiveTotal = viewerId
+    ? Number(
+        db.prepare("SELECT COUNT(*) AS c FROM listings WHERE status = 'ACTIVE' AND seller_id = ?")
+          .get(String(viewerId))?.c || 0
+      )
+    : 0;
 
   const rows = db.prepare(
     MARKET_SELECT +
@@ -573,6 +597,8 @@ export function listMarketPage({
     items: rows.map(hydrateMarketRow),
     total,
     activeTotal,
+    myActiveTotal,
+    scope: normalizedScope,
     limit: safeLimit,
     offset: safeOffset,
     hasMore: safeOffset + rows.length < total,
@@ -638,6 +664,45 @@ export function listSupplies() {
     edition: row.edition_key,
     issued: Number(row.issued_count),
   }));
+}
+
+export function getCardProvenance(cardId) {
+  migrate();
+  const card = db.prepare("SELECT * FROM cards WHERE id = ?").get(String(cardId));
+  if (!card) return null;
+
+  const sold = db.prepare(`
+    SELECT id,seller_id,buyer_id,price,created_at,sold_at
+    FROM listings
+    WHERE card_id = ? AND status = 'SOLD'
+    ORDER BY sold_at ASC, created_at ASC
+  `).all(String(cardId));
+
+  const firstSeller = sold[0]?.seller_id || card.owner_id;
+  const events = [
+    {
+      type: "ISSUED",
+      at: Number(card.created_at),
+      ownerId: firstSeller,
+      edition: card.edition_key,
+      serial: Number(card.serial_number),
+    },
+    ...sold.map((row) => ({
+      type: "SOLD",
+      at: Number(row.sold_at || row.created_at),
+      sellerId: row.seller_id,
+      buyerId: row.buyer_id,
+      price: Number(row.price),
+      listingId: row.id,
+    })),
+  ];
+
+  return {
+    cardId: String(card.id),
+    currentOwnerId: card.owner_id,
+    transferCount: sold.length,
+    events,
+  };
 }
 
 export function getDefinitionSupplies(definitionId) {
