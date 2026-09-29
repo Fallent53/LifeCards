@@ -8,6 +8,7 @@ const {
   ncbiTaxonomyUrl,
   parseWikipediaPage,
   parseNcbiSummary,
+  fetchNcbi,
 } = await import("../src/science.mjs");
 
 test("Lifemap deep links use the NCBI taxonomy id", () => {
@@ -58,4 +59,18 @@ test("NCBI taxonomy summary is normalized", () => {
   assert.equal(result.taxId, "9689");
   assert.equal(result.scientificName, "Panthera leo");
   assert.equal(result.rank, "species");
+});
+
+
+test("LUCA is never assigned an NCBI taxonomy id", async () => {
+  let networkCalled = false;
+  const result = await fetchNcbi(
+    { id: "luca", kind: "origin", scientificName: "LUCA", commonName: "Last Universal Common Ancestor" },
+    { fetchImpl: async () => { networkCalled = true; throw new Error("network should not be called"); } }
+  );
+
+  assert.equal(networkCalled, false);
+  assert.equal(result.available, false);
+  assert.equal(result.taxId, null);
+  assert.equal(result.lifemapUrl, null);
 });
