@@ -14,8 +14,10 @@ db.exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
 
 function nowMs() { return Date.now(); }
 function uuid() { return crypto.randomUUID(); }
+let migrationComplete = false;
 
 export function migrate() {
+  if (migrationComplete) return;
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
@@ -135,6 +137,8 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS cards_owner_definition_idx ON cards(owner_id, definition_id);
     CREATE INDEX IF NOT EXISTS cards_owner_rarity_idx ON cards(owner_id, rarity);
     CREATE INDEX IF NOT EXISTS cards_owner_kind_idx ON cards(owner_id, kind);
+    CREATE INDEX IF NOT EXISTS cards_owner_definition_created_idx
+      ON cards(owner_id, definition_id, created_at DESC);
   `);
 
   const missingNames = db.prepare(
@@ -162,6 +166,8 @@ export function migrate() {
       throw error;
     }
   }
+
+  migrationComplete = true;
 }
 
 export function ensureUser(id = "explorer", displayName = "Explorer") {
@@ -552,47 +558,63 @@ export function listCollectionPage(userId = "explorer", options = {}) {
       .get(...where.params)?.c || 0
   );
 
+  const rarityOrder=
+    "CASE rarity " +
+    "WHEN 'UNKNOWN' THEN 0 WHEN 'MYTHIC' THEN 1 WHEN 'LEGENDARY' THEN 2 " +
+    "WHEN 'ULTRA_RARE' THEN 3 WHEN 'SUPER_RARE' THEN 4 WHEN 'RARE' THEN 5 " +
+    "WHEN 'UNCOMMON' THEN 6 WHEN 'COMMON' THEN 7 ELSE 99 END";
+
   const groupOrder = sort === "NEWEST"
     ? "newest_card DESC"
     : sort === "NAME"
       ? "common_name COLLATE NOCASE ASC, scientific_name COLLATE NOCASE ASC"
-      : collectionOrder("RARITY");
+      : rarityOrder + " ASC, common_name COLLATE NOCASE ASC";
 
-  const sql =
-    "WITH filtered AS (" +
-      "SELECT * FROM cards WHERE " + where.sql +
-    "), ranked AS (" +
-      "SELECT filtered.*, " +
-      "ROW_NUMBER() OVER (PARTITION BY definition_id ORDER BY " +
-        "CASE WHEN finish = 'HOLO' THEN 0 ELSE 1 END, " +
-        "CASE WHEN edition_key IN ('WILD CENSUS I','FOUNDATION I','FOSSIL RECORD I') THEN 0 ELSE 1 END, " +
-        "serial_number ASC) AS representative_rank, " +
-      "COUNT(*) OVER (PARTITION BY definition_id) AS copy_count, " +
-      "SUM(CASE WHEN finish = 'HOLO' THEN 1 ELSE 0 END) OVER (PARTITION BY definition_id) AS holo_count, " +
-      "SUM(CASE WHEN edition_key = 'WILD CENSUS I' THEN 1 ELSE 0 END) OVER (PARTITION BY definition_id) AS wild_count, " +
-      "MIN(serial_number) OVER (PARTITION BY definition_id) AS lowest_serial, " +
-      "MAX(created_at) OVER (PARTITION BY definition_id) AS newest_card " +
-      "FROM filtered" +
-    ") " +
-    "SELECT * FROM ranked WHERE representative_rank = 1 " +
-    "ORDER BY " + groupOrder + " LIMIT ? OFFSET ?";
+  const groups = db.prepare(
+    "SELECT definition_id, " +
+      "COUNT(*) AS copy_count, " +
+      "SUM(CASE WHEN finish='HOLO' THEN 1 ELSE 0 END) AS holo_count, " +
+      "SUM(CASE WHEN edition_key='WILD CENSUS I' THEN 1 ELSE 0 END) AS wild_count, " +
+      "MIN(serial_number) AS lowest_serial, " +
+      "MAX(created_at) AS newest_card, " +
+      "MIN(common_name) AS common_name, " +
+      "MIN(scientific_name) AS scientific_name, " +
+      "MIN(rarity) AS rarity " +
+    "FROM cards WHERE " + where.sql +
+    " GROUP BY definition_id " +
+    "ORDER BY " + groupOrder +
+    " LIMIT ? OFFSET ?"
+  ).all(...where.params, limit, offset);
 
-  const rows = db.prepare(sql).all(...where.params, limit, offset);
+  const representativeSql =
+    "SELECT * FROM cards WHERE " + where.sql +
+    " AND definition_id = ? " +
+    "ORDER BY " +
+      "CASE WHEN finish='HOLO' THEN 0 ELSE 1 END, " +
+      "CASE WHEN edition_key IN ('WILD CENSUS I','FOUNDATION I','FOSSIL RECORD I') THEN 0 ELSE 1 END, " +
+      "serial_number ASC LIMIT 1";
+  const representative = db.prepare(representativeSql);
+
+  const items = groups.map((group) => {
+    const row = representative.get(...where.params, group.definition_id);
+    return {
+      definitionId: group.definition_id,
+      copies: Number(group.copy_count || 0),
+      holoCount: Number(group.holo_count || 0),
+      wildCount: Number(group.wild_count || 0),
+      lowestSerial: Number(group.lowest_serial || 0),
+      newest: Number(group.newest_card || 0),
+      card: hydrateCard(row),
+    };
+  }).filter((item) => item.card);
+
   return {
     mode: "DISCOVERIES",
-    items: rows.map((row) => ({
-      definitionId: row.definition_id,
-      copies: Number(row.copy_count || 0),
-      holoCount: Number(row.holo_count || 0),
-      wildCount: Number(row.wild_count || 0),
-      lowestSerial: Number(row.lowest_serial || 0),
-      newest: Number(row.newest_card || 0),
-      card: hydrateCard(row),
-    })),
+    items,
     total,
     limit,
     offset,
-    hasMore: offset + rows.length < total,
+    hasMore: offset + groups.length < total,
     summary: getCollectionSummary(userId),
   };
 }
