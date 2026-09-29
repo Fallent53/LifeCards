@@ -146,7 +146,8 @@ db.exec(`
     source_dataset TEXT,
     game_rarity TEXT,
     drop_eligible INTEGER NOT NULL DEFAULT 0,
-    child_count INTEGER NOT NULL DEFAULT 0
+    child_count INTEGER NOT NULL DEFAULT 0,
+    descendant_species_count INTEGER NOT NULL DEFAULT 0
   );
 `);
 
@@ -323,6 +324,45 @@ db.exec(`
   CREATE INDEX drop_pool_taxon_idx ON drop_pool(taxon_id);
 `);
 
+console.log("Calculating descendant species counts for radial map weighting…");
+db.exec(`
+  CREATE TEMP TABLE species_counts (
+    id TEXT PRIMARY KEY,
+    species_count INTEGER NOT NULL
+  );
+
+  INSERT INTO species_counts(id, species_count)
+  WITH RECURSIVE lineage(species_id, ancestor_id) AS (
+    SELECT id, parent_id
+    FROM taxa
+    WHERE rank = 'species' AND parent_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT lineage.species_id, parent.parent_id
+    FROM lineage
+    JOIN taxa parent ON parent.id = lineage.ancestor_id
+    WHERE parent.parent_id IS NOT NULL
+  )
+  SELECT ancestor_id, COUNT(*)
+  FROM lineage
+  WHERE ancestor_id IS NOT NULL
+  GROUP BY ancestor_id;
+
+  UPDATE taxa
+  SET descendant_species_count =
+    CASE
+      WHEN rank = 'species' THEN 1
+      ELSE COALESCE(
+        (SELECT species_count FROM species_counts WHERE species_counts.id = taxa.id),
+        0
+      )
+    END;
+
+  CREATE INDEX taxa_descendant_species_idx ON taxa(descendant_species_count DESC);
+  DROP TABLE species_counts;
+`);
+
 if (!rootId && scope.toLowerCase() !== "all") {
   rootId = db.prepare("SELECT id FROM taxa WHERE scientific_name = ? COLLATE NOCASE ORDER BY rank='kingdom' DESC LIMIT 1").get(scope)?.id ?? null;
 }
@@ -342,7 +382,7 @@ for (const [key, value] of Object.entries({
   species_count: String(species),
   scanned_rows: String(seen),
   root_id: String(rootId || ""),
-  schema_version: "3",
+  schema_version: "4",
 })) setMeta.run(key, value);
 
 db.exec("PRAGMA optimize;");
