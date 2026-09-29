@@ -2540,3 +2540,52 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .market-scope-tabs{width:100%;overflow:auto}
   .market-scope-tabs button{flex:0 0 auto}
 }
+
+
+.pack-audit-proof{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  max-width:900px;
+  margin:-10px auto 20px;
+  padding:10px 12px;
+  border:1px solid #31543f;
+  border-radius:11px;
+  background:#0a1811;
+}
+.pack-audit-proof span{
+  display:block;
+  color:#5ed991;
+  font-size:6px;
+  font-weight:800;
+  letter-spacing:.1em;
+}
+.pack-audit-proof b{
+  display:block;
+  margin-top:2px;
+  color:#cfe4d6;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:8px;
+  font-weight:600;
+}
+.pack-audit-proof small{
+  color:#607568;
+  font-size:6px;
+  text-align:right;
+}
+.provenance-event code{
+  display:block;
+  width:max-content;
+  max-width:100%;
+  margin-top:4px;
+  padding:3px 5px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  border:1px solid #2a4737;
+  border-radius:5px;
+  background:#07110c;
+  color:#6f9f81;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:5px;
+}
