@@ -414,6 +414,35 @@ function cacheMergedKnowledge(query,lang,value){
   writePersistentCache(persistedQuery,lang,value);
 }
 
+async function mergeResolvedMedia(base,item,media,{lang="en",resolver=null,confidence="LOW",mediaMatch=null}={}){
+  if(!media?.imageUrl)return base;
+
+  const merged={
+    ...(base||{}),
+    query:item.query,
+    media:{
+      ...media,
+      resolver:resolver||media.resolver||"deep-media-fallback",
+      confidence:confidence||media.confidence||"LOW",
+      mediaMatch:mediaMatch||media.mediaMatch||"DEEP_FALLBACK",
+    },
+    sources:[
+      ...new Set([
+        ...(base?.sources||[]),
+        media.source||"External media",
+      ]),
+    ],
+    sourceStatus:{
+      ...(base?.sourceStatus||{}),
+      media:"ok",
+    },
+    resolvedAt:new Date().toISOString(),
+  };
+
+  cacheMergedKnowledge(item.query,lang,merged);
+  return merged;
+}
+
 async function representativeMediaFallback(base,item,{lang="en"}={}){
   if(base?.media?.imageUrl)return base;
 
@@ -455,6 +484,27 @@ async function representativeMediaFallback(base,item,{lang="en"}={}){
   return base;
 }
 
+async function deepMediaFallback(base,item,{lang="en"}={}){
+  if(base?.media?.imageUrl)return base;
+
+  try{
+    const supplemental=await searchSupplementalRealMedia(item.query,{
+      rank:item.rank,
+      extinct:item.extinct,
+    });
+    if(supplemental?.imageUrl){
+      return mergeResolvedMedia(base,item,supplemental,{
+        lang,
+        resolver:supplemental.resolver||"deep-supplemental",
+        confidence:supplemental.confidence||"MEDIUM",
+        mediaMatch:supplemental.mediaMatch||"DEEP_SUPPLEMENTAL",
+      });
+    }
+  }catch{}
+
+  return representativeMediaFallback(base,item,{lang});
+}
+
 export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 } = {}) {
   const normalized = [];
   const seen = new Set();
@@ -468,6 +518,7 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
       id,
       query,
       rank:String(entry?.rank||""),
+      extinct:Boolean(entry?.extinct),
       fallbackQueries:[...new Set(
         (Array.isArray(entry?.fallbackQueries)?entry.fallbackQueries:[])
           .map((value)=>String(value||"").trim())
@@ -486,9 +537,9 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
       const item = normalized[cursor++];
       try {
         const base=await getKnowledge(item.query,{lang});
-        output[item.id]=await representativeMediaFallback(base,item,{lang});
+        output[item.id]=await deepMediaFallback(base,item,{lang});
       } catch {
-        output[item.id]=await representativeMediaFallback(null,item,{lang});
+        output[item.id]=await deepMediaFallback(null,item,{lang});
       }
     }
   }
