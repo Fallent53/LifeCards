@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v7";
@@ -452,7 +452,16 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   const pageImages=[...new Set(
     [...pages.values()].map((page)=>page?.pageimage).filter(Boolean)
   )];
-  const fileMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
+  const wikipediaFileMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
+
+  const unresolvedAttribution=pageImages.filter((name)=>{
+    const media=wikipediaFileMetadata[lowerKey(name)]||null;
+    return !hasCompleteAttribution(media);
+  });
+
+  const commonsFileMetadata=unresolvedAttribution.length
+    ?await getCommonsFilesMetadataBatch(unresolvedAttribution)
+    :{};
 
   const output={};
   const fallback=[];
@@ -472,12 +481,24 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
 
     let media=null;
     if(page?.pageimage){
-      const meta=fileMetadata[lowerKey(page.pageimage)]||null;
-      media=meta||wikipediaThumbnailFallback(page,lang);
+      const key=lowerKey(page.pageimage);
+      const local=wikipediaFileMetadata[key]||null;
+      const commons=commonsFileMetadata[key]||null;
+
+      media=
+        (hasCompleteAttribution(local)?local:null) ||
+        (hasCompleteAttribution(commons)?commons:null) ||
+        local ||
+        commons ||
+        wikipediaThumbnailFallback(page,lang);
+
       if(media){
         media={
           ...media,
-          resolver:"wikipedia-pageimage-batch",
+          resolver:
+            hasCompleteAttribution(commons)&&!hasCompleteAttribution(local)
+              ?"wikipedia-pageimage+commons-batch"
+              :"wikipedia-pageimage-batch",
           confidence:trustedIdentity?"HIGH":"MEDIUM",
           exactTaxonIdentity,
           exactWikipediaTitle,
