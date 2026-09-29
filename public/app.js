@@ -6,7 +6,9 @@ const ui={
   knowledge:new Map(),
   knowledgeLoading:new Set(),
   collectionFilter:"ALL",
+  marketFilter:"ALL",
   query:"",
+  favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
   revealIndex:0,
   opening:false
@@ -177,7 +179,7 @@ function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
         (d.conservation?'<span class="status-pill">'+esc(d.conservation)+'</span>':"")+
       '</div>'+
       '<div class="card-copy">'+
-        '<div class="card-title-row"><div><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em></div><span class="favorite">☆</span></div>'+
+        '<div class="card-title-row"><div><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em></div><button class="favorite '+(ui.favorites.has(d.id)?"active":"")+'" data-favorite="'+esc(d.id)+'" aria-label="Favorite">'+(ui.favorites.has(d.id)?"★":"☆")+'</button></div>'+
         '<p>'+esc(d.summary||"")+'</p>'+
         '<div class="card-bottom">'+
           '<span class="edition '+editionClass(card.edition||"")+'">'+esc(card.edition||d.rank||d.kind)+'</span>'+
@@ -294,17 +296,25 @@ function renderCollection(){
 }
 
 function renderMarket(){
-  const listings=ui.state.market;
+  const allListings=ui.state.market;
+  const listings=allListings.filter(listing=>{
+    if(ui.marketFilter==="HOLO")return listing.card.finish==="HOLO";
+    if(ui.marketFilter==="WILD")return listing.card.edition==="WILD CENSUS I";
+    if(ui.marketFilter==="FOSSIL")return listing.card.edition==="FOSSIL RECORD I";
+    return true;
+  });
+  const marketFilters=["ALL","HOLO","WILD","FOSSIL"];
   main.innerHTML=
     '<section class="market-page">'+
       '<div class="page-hero compact-hero"><span class="eyebrow">SECONDARY MARKET</span><h1>Market</h1><p>Collect editions, serials and finishes. Transactions use Coins; a 5% fee leaves the economy on each sale.</p></div>'+
-      '<div class="market-toolbar"><span>'+listings.length+' active listings</span><div><button class="filter-chip active">All listings</button><button class="filter-chip">Holo</button><button class="filter-chip">Wild</button></div></div>'+
+      '<div class="market-toolbar"><span>'+listings.length+' / '+allListings.length+' active listings</span><div>'+marketFilters.map(filter=>'<button class="filter-chip '+(ui.marketFilter===filter?"active":"")+'" data-market-filter="'+filter+'">'+filter+'</button>').join("")+'</div></div>'+
       '<div class="market-grid">'+(listings.length?listings.map(listing=>
         '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
         '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
-      ).join(""):'<div class="empty-state">No active listings.</div>')+'</div>'+
+      ).join(""):'<div class="empty-state">No listings match this filter.</div>')+'</div>'+
     '</section>';
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{event.stopPropagation();buy(button.dataset.buy)});
+  document.querySelectorAll("[data-market-filter]").forEach(button=>button.onclick=()=>{ui.marketFilter=button.dataset.marketFilter;renderMarket();wireCommon()});
   warmMedia(listings.slice(0,18).map(x=>x.card.definition));
 }
 
@@ -356,6 +366,16 @@ function wireCommon(){
   });
   document.querySelectorAll("[data-definition]").forEach(node=>{
     node.onclick=()=>openDefinition(node.dataset.definition);
+  });
+  document.querySelectorAll("[data-favorite]").forEach(button=>{
+    button.onclick=(event)=>{
+      event.stopPropagation();
+      const id=button.dataset.favorite;
+      if(ui.favorites.has(id))ui.favorites.delete(id);else ui.favorites.add(id);
+      localStorage.setItem("lifecards:favorites",JSON.stringify([...ui.favorites]));
+      button.classList.toggle("active",ui.favorites.has(id));
+      button.textContent=ui.favorites.has(id)?"★":"☆";
+    };
   });
 }
 
