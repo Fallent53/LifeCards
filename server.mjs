@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies } from "./src/database.mjs";
+import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -131,6 +131,13 @@ async function api(request, response, url) {
       return json(response, 200, {
         definitionId,
         items: listDefinitionCopies(uid, definitionId, limit),
+      });
+    }
+    if (request.method === "POST" && url.pathname === "/api/collection/owned") {
+      const input = await bodyJson(request);
+      const scientificNames = Array.isArray(input.scientificNames) ? input.scientificNames : [];
+      return json(response, 200, {
+        scientificNames: ownedScientificNames(uid, scientificNames),
       });
     }
     if (request.method === "POST" && url.pathname === "/api/packs/open") {
