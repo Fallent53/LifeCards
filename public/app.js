@@ -388,8 +388,7 @@ function imageMarkup(definition){
   if(!hasResolved){
     return '<div class="art-loading" data-media-id="'+esc(definition.id)+'" aria-label="Loading image"><span></span><i></i></div>';
   }
-  const initials=(definition.commonName||definition.scientificName||"?").split(/\s+/).slice(0,2).map(x=>x[0]).join("");
-  return '<div class="art-fallback"><span>'+esc(definition.icon||"◌")+'</span><b>'+esc(initials)+'</b><small>No reusable image found</small></div>';
+  return '<div class="art-fallback art-fallback-empty" aria-label="No verified real image available"><small>REAL IMAGE UNAVAILABLE</small></div>';
 }
 function cardSummary(definition){
   const knowledge=ui.knowledge.get(definition.id);
