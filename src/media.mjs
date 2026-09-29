@@ -11,46 +11,81 @@ function acceptedLicense(metadata = {}) {
   return ACCEPTED_LICENSE_MARKERS.some((marker) => raw.includes(marker));
 }
 
-export async function searchCommonsImage(query) {
-  const key = String(query || "").trim().toLowerCase();
-  if (!key) return null;
+function mediaFromPage(page) {
+  const info = page?.imageinfo?.[0];
+  const meta = info?.extmetadata ?? {};
+  if (!info?.thumburl || !acceptedLicense(meta)) return null;
+  return {
+    imageUrl: info.thumburl,
+    originalUrl: info.descriptionurl ?? info.url,
+    title: page.title,
+    creator: cleanHtml(meta.Artist?.value || meta.Credit?.value || "Unknown creator"),
+    license: cleanHtml(meta.LicenseShortName?.value || meta.UsageTerms?.value || "See source"),
+    licenseUrl: meta.LicenseUrl?.value || info.descriptionurl || null,
+    attribution: cleanHtml(meta.Attribution?.value || meta.Credit?.value || meta.Artist?.value || "Wikimedia Commons"),
+    source: "Wikimedia Commons",
+  };
+}
+
+async function commonsQuery(params) {
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
+    signal: AbortSignal.timeout(3500),
+    headers: { "User-Agent": "LifeCards/0.1 (licensed media resolver)" },
+  });
+  if (!response.ok) throw new Error(`Wikimedia Commons returned ${response.status}`);
+  return response.json();
+}
+
+export async function getCommonsFileMetadata(fileName) {
+  const normalized = String(fileName || "").replace(/^File:/i, "").trim();
+  if (!normalized) return null;
+  const key = `file:${normalized.toLowerCase()}`;
   if (memoryCache.has(key)) return memoryCache.get(key);
+
+  const params = new URLSearchParams({
+    action: "query",
+    format: "json",
+    origin: "*",
+    titles: `File:${normalized}`,
+    prop: "imageinfo",
+    iiprop: "url|extmetadata",
+    iiurlwidth: "1200",
+  });
+
+  const json = await commonsQuery(params);
+  const page = Object.values(json?.query?.pages ?? {})[0] ?? null;
+  const result = mediaFromPage(page);
+  memoryCache.set(key, result);
+  return result;
+}
+
+export async function searchCommonsImage(query) {
+  const key = `search:${String(query || "").trim().toLowerCase()}`;
+  if (key === "search:") return null;
+  if (memoryCache.has(key)) return memoryCache.get(key);
+
   const params = new URLSearchParams({
     action: "query",
     format: "json",
     origin: "*",
     generator: "search",
-    gsrsearch: query,
+    gsrsearch: String(query),
     gsrnamespace: "6",
-    gsrlimit: "8",
+    gsrlimit: "12",
     prop: "imageinfo",
     iiprop: "url|extmetadata",
-    iiurlwidth: "900",
+    iiurlwidth: "1200",
   });
-  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
-    signal: AbortSignal.timeout(3000),
-    headers: { "User-Agent": "LifeCards/0.1 (image metadata lookup)" },
-  });
-  if (!response.ok) throw new Error(`Wikimedia Commons returned ${response.status}`);
-  const json = await response.json();
+
+  const json = await commonsQuery(params);
   const pages = Object.values(json?.query?.pages ?? {});
   for (const page of pages) {
-    const info = page.imageinfo?.[0];
-    const meta = info?.extmetadata ?? {};
-    if (!info?.thumburl || !acceptedLicense(meta)) continue;
-    const result = {
-      imageUrl: info.thumburl,
-      originalUrl: info.descriptionurl ?? info.url,
-      title: page.title,
-      creator: cleanHtml(meta.Artist?.value || meta.Credit?.value || "Unknown creator"),
-      license: cleanHtml(meta.LicenseShortName?.value || meta.UsageTerms?.value || "See source"),
-      licenseUrl: meta.LicenseUrl?.value || info.descriptionurl || null,
-      attribution: cleanHtml(meta.Attribution?.value || meta.Credit?.value || meta.Artist?.value || "Wikimedia Commons"),
-      source: "Wikimedia Commons",
-    };
+    const result = mediaFromPage(page);
+    if (!result) continue;
     memoryCache.set(key, result);
     return result;
   }
+
   memoryCache.set(key, null);
   return null;
 }
