@@ -12,7 +12,8 @@ const ui={
   opening:false,
   knowledgeQuestion:null,
   knowledgeResult:null,
-  knowledgeLoading:false
+  knowledgeLoading:false,
+  marketMode:"fixed"
 };
 
 const main=document.getElementById("main");
@@ -179,7 +180,7 @@ function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
         (media&&media.creator?'<small class="photo-credit">'+esc(media.creator)+' · '+esc(media.license||"")+'</small>':"")+
       '</div>'+
     '</div>'+
-    (showSell&&card.id?'<button class="sell-button" data-sell="'+esc(card.id)+'">List on market</button>':"")+
+    (showSell&&card.id?'<div class="card-market-actions"><button class="sell-button" data-sell="'+esc(card.id)+'">Sell</button><button class="auction-button" data-auction-card="'+esc(card.id)+'">Auction</button></div>':"")+
   '</article>';
 }
 
@@ -285,22 +286,52 @@ function renderCollection(){
   search?.addEventListener("input",event=>{ui.query=event.target.value;renderCollection();wireCommon()});
   document.querySelectorAll("[data-filter]").forEach(button=>button.onclick=()=>{ui.collectionFilter=button.dataset.filter;renderCollection();wireCommon()});
   document.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{event.stopPropagation();listCard(button.dataset.sell)});
+  document.querySelectorAll("[data-auction-card]").forEach(button=>button.onclick=event=>{event.stopPropagation();auctionCard(button.dataset.auctionCard)});
   warmMedia(filtered.slice(0,24).map(c=>c.definition));
 }
 
+function remainingTime(timestamp){
+  const ms=Math.max(0,Number(timestamp)-Date.now());
+  if(ms<60*1000)return "<1m";
+  if(ms<60*60*1000)return Math.ceil(ms/(60*1000))+"m";
+  if(ms<24*60*60*1000)return Math.ceil(ms/(60*60*1000))+"h";
+  return Math.ceil(ms/(24*60*60*1000))+"d";
+}
+
 function renderMarket(){
-  const listings=ui.state.market;
+  const listings=ui.state.market||[];
+  const auctions=ui.state.auctions||[];
+  const fixed=ui.marketMode==="fixed";
+  const visible=fixed?listings:auctions;
+
   main.innerHTML=
     '<section class="market-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">SECONDARY MARKET</span><h1>Market</h1><p>Collect editions, serials and finishes. Transactions use Coins; a 5% fee leaves the economy on each sale.</p></div>'+
-      '<div class="market-toolbar"><span>'+listings.length+' active listings</span><div><button class="filter-chip active">All listings</button><button class="filter-chip">Holo</button><button class="filter-chip">Wild</button></div></div>'+
-      '<div class="market-grid">'+(listings.length?listings.map(listing=>
-        '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
-        '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
-      ).join(""):'<div class="empty-state">No active listings.</div>')+'</div>'+
+      '<div class="page-hero compact-hero"><span class="eyebrow">SECONDARY MARKET</span><h1>Market</h1><p>Collect editions, serials and finishes. Fixed sales and auctions settle in Coins with a 5% economy sink.</p></div>'+
+      '<div class="market-toolbar"><span>'+(fixed?listings.length:auctions.length)+' active '+(fixed?"listings":"auctions")+'</span><div class="market-mode">'+
+        '<button data-market-mode="fixed" class="filter-chip '+(fixed?"active":"")+'">Buy now</button>'+
+        '<button data-market-mode="auction" class="filter-chip '+(!fixed?"active":"")+'">Auctions</button>'+
+      '</div></div>'+
+      '<div class="market-grid">'+(
+        visible.length
+          ? (fixed
+              ? listings.map(listing=>
+                  '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
+                  '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
+                ).join("")
+              : auctions.map(auction=>{
+                  const current=auction.highestBid==null?auction.startingPrice:auction.highestBid;
+                  return '<article class="market-item auction-item">'+cardHtml(auction.card,{compact:true})+
+                    '<div class="auction-timer">'+remainingTime(auction.endsAt)+' left</div>'+
+                    '<div class="market-meta"><div><small>'+(auction.highestBid==null?"STARTING BID":"CURRENT BID")+'</small><strong>◆ '+formatNumber(current)+'</strong><span>'+esc(auction.sellerId)+'</span></div><button data-bid="'+esc(auction.id)+'" data-min-bid="'+(current+(auction.highestBid==null?0:1))+'">Bid</button></div></article>';
+                }).join(""))
+          : '<div class="empty-state">No active '+(fixed?"listings":"auctions")+'.</div>'
+      )+'</div>'+
     '</section>';
+
+  document.querySelectorAll("[data-market-mode]").forEach(button=>button.onclick=()=>{ui.marketMode=button.dataset.marketMode;renderMarket();wireCommon()});
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{event.stopPropagation();buy(button.dataset.buy)});
-  warmMedia(listings.slice(0,18).map(x=>x.card.definition));
+  document.querySelectorAll("[data-bid]").forEach(button=>button.onclick=event=>{event.stopPropagation();bidAuction(button.dataset.bid,Number(button.dataset.minBid))});
+  warmMedia(visible.slice(0,18).map(x=>x.card.definition));
 }
 
 function treeBranch(id,nodes,owned){
@@ -594,6 +625,42 @@ async function listCard(cardId){
   try{
     await api("/api/market/list",{method:"POST",body:JSON.stringify({cardId,price:amount})});
     flash("Listed on market");
+    await refresh();
+  }catch(error){flash(error.message)}
+}
+
+async function auctionCard(cardId){
+  const startRaw=window.prompt("Starting bid in Coins:", "100");
+  if(startRaw==null)return;
+  const startingPrice=Number(startRaw);
+  if(!Number.isSafeInteger(startingPrice)||startingPrice<=0)return flash("Enter a whole positive Coin amount");
+
+  const durationRaw=window.prompt("Auction duration in minutes (5 to 10080):", "60");
+  if(durationRaw==null)return;
+  const durationMinutes=Number(durationRaw);
+  if(!Number.isFinite(durationMinutes)||durationMinutes<5)return flash("Auction duration must be at least 5 minutes");
+
+  try{
+    await api("/api/market/auction",{
+      method:"POST",
+      body:JSON.stringify({cardId,startingPrice,durationMinutes})
+    });
+    flash("Auction created");
+    await refresh();
+  }catch(error){flash(error.message)}
+}
+
+async function bidAuction(auctionId,minimum){
+  const raw=window.prompt("Your bid in Coins:",String(minimum));
+  if(raw==null)return;
+  const amount=Number(raw);
+  if(!Number.isSafeInteger(amount)||amount<minimum)return flash("Bid is below the minimum");
+  try{
+    await api("/api/market/bid",{
+      method:"POST",
+      body:JSON.stringify({auctionId,amount})
+    });
+    flash("Bid placed");
     await refresh();
   }catch(error){flash(error.message)}
 }
