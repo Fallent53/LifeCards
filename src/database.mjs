@@ -5,7 +5,7 @@ import { dirname, resolve } from "node:path";
 import { byId, publicCatalog } from "./catalog.mjs";
 import { DEFAULT_CONFIG, generatePackBlueprint, packsAccrued, cryptoRng } from "./game-engine.mjs";
 import { resolveDefinition, selectImportedDefinition } from "./definitions.mjs";
-import { taxonomyStatus } from "./taxonomy-store.mjs";
+import { taxonomyStatus, getAuditedMedia } from "./taxonomy-store.mjs";
 
 const dbPath = resolve(process.env.LIFECARDS_DB_PATH ?? "./data/lifecards.sqlite");
 mkdirSync(dirname(dbPath), { recursive: true });
@@ -269,6 +269,17 @@ function hydrateCard(row) {
     try { definition = JSON.parse(row.definition_json); } catch {}
   }
   definition ||= resolveDefinition(row.definition_id);
+  if(definition){
+    const auditedMedia=getAuditedMedia(
+      row.definition_id,
+      definition.scientificName||row.scientific_name||""
+    );
+    definition={
+      ...definition,
+      media:auditedMedia,
+      mediaResolved:true,
+    };
+  }
   return {
     id: row.id,
     ownerId: row.owner_id,
