@@ -1,3 +1,5 @@
+import { RadialTreeMap } from "./radial-tree.js";
+
 const ui={
   view:"packs",
   state:null,
@@ -9,7 +11,12 @@ const ui={
   marketFilter:"ALL",
   query:"",
   codexQuery:"",
+  codexResults:[],
+  codexSearchLoading:false,
   treeQuery:"",
+  treeSearchResults:[],
+  treePayload:null,
+  taxonomyStatus:null,
   favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
   revealIndex:0,
@@ -25,6 +32,9 @@ const revealScene=document.getElementById("revealScene");
 const cardModal=document.getElementById("cardModal");
 const cardModalContent=document.getElementById("cardModalContent");
 const toast=document.getElementById("toast");
+let radialMap=null;
+let treeSearchTimer=null;
+let codexSearchTimer=null;
 
 const RARITY={
   COMMON:{label:"Common",short:"C"},
@@ -178,6 +188,47 @@ function cardSummary(definition){
   const text=String(live||definition.summary||"").replace(/\s+/g," ").trim();
   if(text.length<=155)return text;
   return text.slice(0,152).replace(/\s+\S*$/,"")+"…";
+}
+
+function rarityForRank(rank){
+  const value=String(rank||"").toLowerCase();
+  if(value==="domain"||value==="kingdom")return "MYTHIC";
+  if(value==="phylum")return "LEGENDARY";
+  if(value==="class")return "ULTRA_RARE";
+  if(value==="order")return "SUPER_RARE";
+  if(value==="family")return "RARE";
+  if(value==="genus")return "UNCOMMON";
+  return "COMMON";
+}
+
+function taxonToDefinition(taxon){
+  if(!taxon)return null;
+  return {
+    id:String(taxon.id),
+    taxonomyId:String(taxon.id),
+    parentId:taxon.parentId?String(taxon.parentId):null,
+    scientificName:taxon.scientificName||taxon.canonicalName||"Unknown taxon",
+    commonName:taxon.commonName||taxon.canonicalName||taxon.scientificName||"Unknown taxon",
+    rank:taxon.rank||"unranked",
+    kind:taxon.kind||((String(taxon.rank).toLowerCase()==="species")?"species":"taxon"),
+    temporalStatus:taxon.extinct?"extinct":"extant",
+    rarity:taxon.rarity||rarityForRank(taxon.rank),
+    icon:taxon.icon||((String(taxon.rank).toLowerCase()==="species")?"◉":"◎"),
+    summary:taxon.source==="Catalogue of Life"
+      ?"Catalogue of Life taxon. Open the scientific record to resolve Wikipedia, Wikidata, NCBI and Lifemap links."
+      :"",
+    source:taxon.source||"Catalogue of Life",
+    childCount:Number(taxon.childCount||0),
+    collectible:Boolean(ui.state?.catalog?.some(entry=>String(entry.id)===String(taxon.id))),
+  };
+}
+
+function taxonomySummary(status){
+  if(!status)return "Taxonomy unavailable";
+  if(status.ready){
+    return "Catalogue of Life · "+formatNumber(status.taxonCount)+" taxa · "+formatNumber(status.speciesCount)+" species";
+  }
+  return "Seed tree · import full Animalia with npm run sync:col";
 }
 
 function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
@@ -346,54 +397,194 @@ function renderMarket(){
   warmMedia(listings.slice(0,18).map(x=>x.card.definition));
 }
 
-function treeBranch(id,nodes,owned){
-  const node=nodes.find(x=>x.id===id);
-  if(!node)return "";
-  const children=nodes.filter(x=>x.parentId===id);
-  return '<div class="tree-branch"><div class="tree-node '+(owned.has(id)?"owned":"")+' '+(node.rarity==="MYTHIC"?"major":"")+'" data-definition="'+esc(node.id)+'">'+
-    '<span class="tree-icon">'+esc(node.icon||"◌")+'</span><div><b>'+esc(node.commonName)+'</b><small>'+esc(node.rank||node.kind)+' · '+esc((RARITY[node.rarity]||{}).label||node.rarity)+'</small></div>'+
-    (owned.has(id)?'<i>✓</i>':'')+'</div>'+
-    (children.length?'<div class="tree-children">'+children.map(c=>treeBranch(c.id,nodes,owned)).join("")+'</div>':"")+
-  '</div>';
+async function loadTreePayload(rootId){
+  const query=rootId?"&root="+encodeURIComponent(rootId):"";
+  const payload=await api("/api/taxonomy/subtree?depth=4&childLimit=44&nodeLimit=900"+query);
+  ui.treePayload=payload;
+  ui.taxonomyStatus=payload?.status||ui.taxonomyStatus;
+  return payload;
+}
+
+async function focusTree(rootId){
+  const holder=document.getElementById("radialTreeMap");
+  if(holder)holder.classList.add("loading");
+  try{
+    const payload=await loadTreePayload(rootId);
+    if(ui.view!=="tree")return;
+    drawRadialTree(payload);
+    renderTreeBreadcrumb(payload);
+  }catch(error){
+    const target=document.getElementById("radialTreeMap");
+    if(target)target.innerHTML='<div class="radial-empty">'+esc(error.message)+'</div>';
+  }
+}
+
+function renderTreeBreadcrumb(payload){
+  const target=document.getElementById("treeBreadcrumb");
+  if(!target||!payload)return;
+  const path=payload.path||[];
+  target.innerHTML=path.map((node,index)=>
+    '<button data-tree-crumb="'+esc(node.id)+'" class="'+(index===path.length-1?"active":"")+'">'+esc(node.commonName||node.scientificName)+'</button>'
+  ).join('<span>›</span>');
+  target.querySelectorAll("[data-tree-crumb]").forEach(button=>{
+    button.onclick=()=>focusTree(button.dataset.treeCrumb);
+  });
+}
+
+function drawRadialTree(payload){
+  const holder=document.getElementById("radialTreeMap");
+  if(!holder||!payload)return;
+  holder.classList.remove("loading");
+  radialMap=new RadialTreeMap(holder,{
+    onFocus:(node)=>focusTree(node.id),
+    onSelect:(node)=>openTaxonomyNode(node),
+    onHome:()=>focusTree(payload.status?.rootId||ui.taxonomyStatus?.rootId||"animalia"),
+    onUp:(current)=>{
+      const path=current?.path||[];
+      const parent=path.length>1?path[path.length-2]:null;
+      if(parent)focusTree(parent.id);
+    }
+  });
+  radialMap.render(payload);
+}
+
+async function openTaxonomyNode(node){
+  const definition=taxonToDefinition(node);
+  if(!definition)return;
+  if(Number(node.childCount||0)>0){
+    return focusTree(node.id);
+  }
+  openCardModal(definition,null);
+}
+
+function scheduleTreeSearch(query){
+  clearTimeout(treeSearchTimer);
+  const q=String(query||"").trim();
+  if(q.length<2){
+    ui.treeSearchResults=[];
+    renderTreeSearchResults();
+    return;
+  }
+  treeSearchTimer=setTimeout(async()=>{
+    try{
+      const result=await api("/api/taxonomy/search?q="+encodeURIComponent(q)+"&limit=12");
+      if(ui.treeQuery.trim()!==q)return;
+      ui.treeSearchResults=result.results||[];
+      ui.taxonomyStatus=result.taxonomy||ui.taxonomyStatus;
+      renderTreeSearchResults();
+    }catch{
+      ui.treeSearchResults=[];
+      renderTreeSearchResults();
+    }
+  },220);
+}
+
+function renderTreeSearchResults(){
+  const target=document.getElementById("treeSearchResults");
+  if(!target)return;
+  const q=ui.treeQuery.trim();
+  if(q.length<2){
+    target.innerHTML="";
+    target.classList.remove("visible");
+    return;
+  }
+  const results=ui.treeSearchResults||[];
+  target.classList.add("visible");
+  target.innerHTML=results.length?results.map(node=>
+    '<button data-tree-result="'+esc(node.id)+'"><span class="tree-result-dot"></span><div><b>'+esc(node.commonName||node.scientificName)+'</b><small>'+esc(node.scientificName)+' · '+esc(node.rank||"")+' · '+formatNumber(node.childCount||0)+' children</small></div></button>'
+  ).join(""):'<div class="tree-search-empty">No taxon found</div>';
+  target.querySelectorAll("[data-tree-result]").forEach(button=>{
+    button.onclick=()=>{
+      const node=results.find(item=>String(item.id)===String(button.dataset.treeResult));
+      ui.treeQuery="";
+      ui.treeSearchResults=[];
+      if(node&&Number(node.childCount||0)>0)focusTree(node.id);
+      else if(node)openTaxonomyNode(node);
+      const input=document.getElementById("treeSearch");
+      if(input)input.value="";
+      renderTreeSearchResults();
+    };
+  });
 }
 
 function renderTree(){
-  const nodes=ui.state.catalog.filter(d=>d.kind!=="origin");
-  const owned=new Set(ui.state.inventory.map(c=>c.definitionId));
-  const q=ui.treeQuery.trim().toLowerCase();
-  const matches=q?ui.state.catalog.filter(d=>[d.commonName,d.scientificName,d.rank,d.kind].some(v=>String(v||"").toLowerCase().includes(q))).slice(0,8):[];
+  const status=ui.taxonomyStatus||ui.treePayload?.status;
   main.innerHTML=
-    '<section class="tree-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">PHYLOGENETIC ALBUM</span><h1>Tree of Life</h1><p>Collect the organisms and the branches connecting them. The deeper the node, the more foundational — and generally rarer — its card.</p></div>'+
-      '<div class="tree-search-wrap"><label class="search-box"><span>⌕</span><input id="treeSearch" placeholder="Find a species, family, clade..." value="'+esc(ui.treeQuery)+'"></label>'+
-        (q?'<div class="tree-search-results">'+(matches.length?matches.map(d=>'<button data-definition="'+esc(d.id)+'"><span>'+esc(d.icon||"◌")+'</span><div><b>'+esc(d.commonName)+'</b><small>'+esc(d.scientificName)+' · '+esc(d.rarity)+'</small></div></button>').join(""):'<span>No match</span>')+'</div>':"")+
+    '<section class="tree-map-page">'+
+      '<div class="tree-map-head">'+
+        '<div><span class="eyebrow">PHYLOGENETIC CARTOGRAPHY</span><h1>Tree of Life</h1><p>Navigate the classification as a living radial map. Zoom into a branch until individual species emerge.</p></div>'+
+        '<div class="taxonomy-status '+(status?.ready?"ready":"seed")+'"><i></i><div><b>'+esc(taxonomySummary(status))+'</b><small>'+(status?.ready?esc(status.release||status.datasetKey||"Catalogue of Life"):'The game remains usable while the full database is absent.')+'</small></div></div>'+
       '</div>'+
-      '<div class="tree-legend"><span><i class="legend-dot owned"></i>Owned taxon</span><span><i class="legend-dot"></i>Known node</span><span class="legend-origin">UNKNOWN = unique origin</span></div>'+
-      '<div class="tree-canvas">'+
-        '<div class="luca-node" data-definition="luca"><span>✺</span><div><small>UNKNOWN</small><b>LUCA</b><em>#1 / 1</em></div></div>'+
-        '<div class="root-line"></div>'+
-        '<div class="tree-roots">'+["bacteria","archaea","eukaryota"].map(id=>treeBranch(id,nodes,owned)).join("")+'</div>'+
+      '<div class="tree-map-controls">'+
+        '<div class="tree-search-wrap radial-search"><label class="search-box"><span>⌕</span><input id="treeSearch" autocomplete="off" placeholder="Lion, Felidae, Mollusca, Arthropoda…" value="'+esc(ui.treeQuery)+'"></label><div id="treeSearchResults" class="tree-search-results"></div></div>'+
+        '<div id="treeBreadcrumb" class="tree-breadcrumb"></div>'+
       '</div>'+
+      '<div id="radialTreeMap" class="radial-tree-map loading"><div class="radial-loading"><span></span><b>Building phylogenetic map…</b></div></div>'+
+      '<div class="tree-map-foot"><span>Data backbone: '+esc(status?.ready?"Catalogue of Life":"LifeCards seed taxonomy")+'</span><span>External scientific links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
     '</section>';
-  const treeSearch=document.getElementById("treeSearch");
-  treeSearch?.addEventListener("input",event=>{ui.treeQuery=event.target.value;renderTree();wireCommon();document.getElementById("treeSearch")?.focus()});
+
+  const search=document.getElementById("treeSearch");
+  search?.addEventListener("input",event=>{
+    ui.treeQuery=event.target.value;
+    scheduleTreeSearch(ui.treeQuery);
+  });
+  renderTreeSearchResults();
+
+  if(ui.treePayload){
+    drawRadialTree(ui.treePayload);
+    renderTreeBreadcrumb(ui.treePayload);
+  }else{
+    focusTree(status?.rootId||"");
+  }
+}
+
+function scheduleCodexSearch(query){
+  clearTimeout(codexSearchTimer);
+  const q=String(query||"").trim();
+  if(q.length<2){
+    ui.codexResults=[];
+    ui.codexSearchLoading=false;
+    renderCodex();
+    return;
+  }
+  ui.codexSearchLoading=true;
+  codexSearchTimer=setTimeout(async()=>{
+    try{
+      const result=await api("/api/taxonomy/search?q="+encodeURIComponent(q)+"&limit=60");
+      if(ui.codexQuery.trim()!==q)return;
+      ui.codexResults=(result.results||[]).map(taxonToDefinition);
+      ui.taxonomyStatus=result.taxonomy||ui.taxonomyStatus;
+    }catch{
+      ui.codexResults=[];
+    }finally{
+      ui.codexSearchLoading=false;
+      if(ui.view==="codex")renderCodex();
+    }
+  },240);
 }
 
 function renderCodex(){
-  const q=ui.codexQuery.trim().toLowerCase();
-  const catalog=ui.state.catalog.filter(d=>!q||[d.commonName,d.scientificName,d.kind,d.rank,d.rarity].some(v=>String(v||"").toLowerCase().includes(q)));
+  const q=ui.codexQuery.trim();
+  const local=ui.state.catalog;
+  const catalog=q.length>=2?ui.codexResults:local;
+  const status=ui.taxonomyStatus;
   main.innerHTML=
     '<section class="codex-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Every collectible points back to the scientific record. Gameplay rarity and biological conservation are deliberately separate.</p></div>'+
-      '<div class="collection-toolbar"><label class="search-box"><span>⌕</span><input id="codexSearch" placeholder="Search scientific or common names..." value="'+esc(ui.codexQuery)+'"></label><span class="result-count">'+catalog.length+' entries</span></div>'+
-      '<div class="codex-grid">'+catalog.map(d=>
-        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rarity)+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(cardSummary(d))+'</p></div><span class="codex-arrow">→</span></article>'
-      ).join("")+'</div>'+
+      '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Search the complete taxonomy locally after a Catalogue of Life import. Images and descriptions resolve lazily through Wikipedia/Wikimedia.</p></div>'+
+      '<div class="collection-toolbar codex-toolbar"><label class="search-box"><span>⌕</span><input id="codexSearch" autocomplete="off" placeholder="Search any animal scientific name…" value="'+esc(ui.codexQuery)+'"></label><span class="result-count">'+(ui.codexSearchLoading?"Searching…":catalog.length+" shown")+'</span></div>'+
+      '<div class="codex-dataset-banner '+(status?.ready?"ready":"seed")+'"><b>'+esc(taxonomySummary(status))+'</b><small>'+(status?.ready?"Search is querying the local Catalogue of Life database.":"Run npm install then npm run sync:col for the complete Animalia catalogue.")+'</small></div>'+
+      '<div class="codex-grid">'+(catalog.length?catalog.map(d=>
+        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rank||d.rarity||"")+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(cardSummary(d))+'</p></div><span class="codex-arrow">→</span></article>'
+      ).join(""):'<div class="empty-state">'+(ui.codexSearchLoading?"Searching the taxonomy…":"No taxon found.")+'</div>')+'</div>'+
     '</section>';
+
   const codexSearch=document.getElementById("codexSearch");
-  codexSearch?.addEventListener("input",event=>{ui.codexQuery=event.target.value;renderCodex();wireCommon();document.getElementById("codexSearch")?.focus()});
+  codexSearch?.addEventListener("input",event=>{
+    ui.codexQuery=event.target.value;
+    scheduleCodexSearch(ui.codexQuery);
+  });
   document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
-  warmMedia(catalog.filter(d=>d.kind!=="origin").slice(0,24));
+  warmMedia(catalog.slice(0,18));
 }
 
 function wireCommon(){
@@ -487,9 +678,17 @@ function openOwnedCard(id){
   openCardModal(card.definition,card);
 }
 
-function openDefinition(id){
-  const d=ui.state.catalog.find(x=>x.id===id);
-  if(d)openCardModal(d,null);
+async function openDefinition(id){
+  const local=ui.state.catalog.find(x=>String(x.id)===String(id));
+  if(local)return openCardModal(local,null);
+  const cached=ui.codexResults.find(x=>String(x.id)===String(id));
+  if(cached)return openCardModal(cached,null);
+  try{
+    const result=await api("/api/taxonomy/taxon?id="+encodeURIComponent(id));
+    if(result.taxon)openCardModal(taxonToDefinition(result.taxon),null);
+  }catch(error){
+    flash(error.message);
+  }
 }
 
 function renderCardModal(definition,card){
@@ -564,6 +763,12 @@ async function buy(listingId){
 async function refresh(shouldRender=true){
   ui.state=await api("/api/state");
   ui.stateFetchedAt=Date.now();
+  if(!ui.taxonomyStatus){
+    api("/api/taxonomy/status").then(result=>{
+      ui.taxonomyStatus=result.taxonomy||null;
+      if(ui.view==="tree"||ui.view==="codex")render();
+    }).catch(()=>{});
+  }
   updateChrome();
   if(shouldRender)render();
 }
