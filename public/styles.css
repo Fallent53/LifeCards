@@ -786,3 +786,17 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .atlas-zoom-readout{display:none}
   .tree-map-foot{flex-direction:column}
 }
+
+
+.atlas-node.atlas-target .atlas-node-dot{
+  fill:#fff6a6;
+  stroke:#fffbd8;
+  filter:drop-shadow(0 0 14px rgba(255,244,132,.95));
+  animation:atlasTargetPulse .8s ease-in-out infinite alternate;
+}
+.atlas-node.atlas-target .atlas-node-pulse{opacity:.42;fill:#fff59a}
+.atlas-node.atlas-target .atlas-node-label{fill:#fffbdc}
+@keyframes atlasTargetPulse{
+  from{transform:scale(.9)}
+  to{transform:scale(1.28)}
+}
