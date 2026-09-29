@@ -22,6 +22,8 @@ CREATE TABLE card_definitions (
   temporal_status text,
   edition_cap bigint,
   media_query text,
+  external_ids jsonb NOT NULL DEFAULT '{}'::jsonb,
+  source_provenance jsonb NOT NULL DEFAULT '[]'::jsonb,
   scientific_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb
 );
 CREATE TABLE supplies (
@@ -52,3 +54,13 @@ CREATE TABLE listings (
   created_at timestamptz NOT NULL DEFAULT now(),
   sold_at timestamptz
 );
+
+CREATE TABLE external_cache (
+  provider text NOT NULL,
+  cache_key text NOT NULL,
+  payload jsonb NOT NULL,
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  expires_at timestamptz NOT NULL,
+  PRIMARY KEY(provider, cache_key)
+);
+CREATE INDEX external_cache_expiry_idx ON external_cache(expires_at);
