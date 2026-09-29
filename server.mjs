@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance } from "./src/database.mjs";
+import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance, getAuditHead, getPackAuditForUser } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -188,6 +188,15 @@ async function api(request, response, url) {
       const provenance = getCardProvenance(cardId);
       if (!provenance) return json(response, 404, { error: "Card not found" });
       return json(response, 200, { provenance });
+    }
+    if (request.method === "GET" && url.pathname === "/api/audit/head") {
+      return json(response, 200, { audit: getAuditHead() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/audit/pack") {
+      const id = url.searchParams.get("id") || "";
+      const audit = getPackAuditForUser(uid, id);
+      if (!audit) return json(response, 404, { error: "Pack audit not found" });
+      return json(response, 200, { audit });
     }
     if (request.method === "GET" && url.pathname === "/api/media") {
       const query = url.searchParams.get("q") || "";
