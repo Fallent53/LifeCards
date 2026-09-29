@@ -167,12 +167,21 @@ function mediaCandidateScore(media, confidence = "LOW", resolver = "") {
   if(!media?.imageUrl)return -1;
   let score=0;
   if(hasCompleteAttribution(media))score+=100;
+
   const level=String(confidence||"LOW").toUpperCase();
   if(level==="HIGH")score+=40;
   else if(level==="MEDIUM")score+=20;
-  if(String(resolver).startsWith("wikipedia-pageimage"))score+=6;
-  else if(String(resolver).startsWith("wikidata-p18"))score+=5;
-  else if(String(resolver).startsWith("gbif"))score+=4;
+
+  const name=String(resolver||media?.resolver||"").toLowerCase();
+  if(name.includes("inaturalist-exact-wild"))score+=90;
+  else if(name.includes("gbif-exact-field")||name.includes("gbif-accepted-field"))score+=80;
+  else if(name.includes("inaturalist-taxon-representative"))score+=70;
+  else if(name.startsWith("wikipedia-pageimage"))score+=35;
+  else if(name.startsWith("wikidata-p18"))score+=30;
+  else if(name.startsWith("gbif"))score+=20;
+  else if(name.startsWith("commons"))score+=15;
+  else if(name.startsWith("idigbio"))score+=5;
+
   return score;
 }
 
@@ -640,6 +649,20 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
       }
     }
 
+    try{
+      const supplemental=await searchSupplementalRealMedia(entry.query,{
+        rank:entry.rank,
+        extinct:entry.extinct,
+      });
+      if(supplemental){
+        mediaCandidates.push({
+          media:supplemental,
+          resolver:supplemental.resolver||"supplemental-real-media",
+          confidence:supplemental.confidence||"MEDIUM",
+        });
+      }
+    }catch{}
+
     const best=chooseBestMediaCandidate(mediaCandidates);
     if(best){
       media={
@@ -652,10 +675,10 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
       };
     }
 
-    if(page&&media&&hasCompleteAttribution(media)){
+    if(media&&hasCompleteAttribution(media)){
       const value={
         query:entry.query,
-        wikipedia:{
+        wikipedia:page?{
           title:page.title,
           extract:"",
           description:entity?.descriptions?.[lang]?.value||entity?.descriptions?.en?.value||null,
@@ -663,7 +686,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
           thumbnailUrl:page.thumbnail?.source||null,
           pageImage:page.pageimage||null,
           language:lang,
-        },
+        }:null,
         wikidata:qid?{
           id:qid,
           pageUrl:`https://www.wikidata.org/wiki/${qid}`,
@@ -696,33 +719,9 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     }
   }
 
-  // Every unresolved taxon now gets a real-media pass. The previous audit
-  // only processed four fallbacks per 40-row batch, creating false NO_IMAGE
-  // results for the remaining rows.
+  // Supplemental sources were already evaluated for every entry above.
   for(const entry of fallback){
-    try{
-      const media=await searchSupplementalRealMedia(entry.query,{
-        rank:entry.rank,
-        extinct:entry.extinct,
-      });
-      output[entry.id]=media?{
-        query:entry.query,
-        wikipedia:null,
-        wikidata:null,
-        taxonomy:{ncbiTaxId:null,ncbiUrl:null,lifemapUrl:null},
-        media,
-        sources:[media.source].filter(Boolean),
-        sourceStatus:{
-          wikipedia:"unavailable",
-          wikidata:"unavailable",
-          media:"ok",
-          lifemap:"unresolved",
-        },
-        resolvedAt:new Date().toISOString(),
-      }:null;
-    }catch{
-      output[entry.id]=null;
-    }
+    if(!(entry.id in output))output[entry.id]=null;
   }
 
   return output;
