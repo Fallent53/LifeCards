@@ -3,6 +3,8 @@ const ui={
   state:null,
   media:new Map(),
   mediaLoading:new Set(),
+  knowledge:new Map(),
+  knowledgeLoading:new Set(),
   collectionFilter:"ALL",
   query:"",
   reveal:null,
@@ -106,6 +108,41 @@ async function warmMedia(definitions,{rerender=true}={}){
     else render();
   }
   return true;
+}
+
+function knowledgeQuery(definition){
+  if(definition.kind==="origin")return definition.commonName||"Last universal common ancestor";
+  return definition.scientificName||definition.commonName;
+}
+
+async function loadKnowledge(definition){
+  if(!definition)return null;
+  if(ui.knowledge.has(definition.id))return ui.knowledge.get(definition.id);
+  if(ui.knowledgeLoading.has(definition.id))return null;
+  ui.knowledgeLoading.add(definition.id);
+  try{
+    const result=await api("/api/knowledge?q="+encodeURIComponent(knowledgeQuery(definition))+"&lang=en");
+    ui.knowledge.set(definition.id,result.knowledge||false);
+    if(result.knowledge?.media&&!ui.media.has(definition.id)){
+      ui.media.set(definition.id,result.knowledge.media);
+    }
+    return result.knowledge||null;
+  }catch{
+    ui.knowledge.set(definition.id,false);
+    return null;
+  }finally{
+    ui.knowledgeLoading.delete(definition.id);
+  }
+}
+
+function knowledgeSourceButtons(knowledge){
+  if(!knowledge)return "";
+  const links=[];
+  if(knowledge.wikipedia?.pageUrl)links.push('<a class="source-button wikipedia" href="'+esc(knowledge.wikipedia.pageUrl)+'" target="_blank" rel="noopener">Wikipedia ↗</a>');
+  if(knowledge.taxonomy?.lifemapUrl)links.push('<a class="source-button lifemap" href="'+esc(knowledge.taxonomy.lifemapUrl)+'" target="_blank" rel="noopener">View in Lifemap ↗</a>');
+  if(knowledge.taxonomy?.ncbiUrl)links.push('<a class="source-button ncbi" href="'+esc(knowledge.taxonomy.ncbiUrl)+'" target="_blank" rel="noopener">NCBI ↗</a>');
+  if(knowledge.wikidata?.pageUrl)links.push('<a class="source-button wikidata" href="'+esc(knowledge.wikidata.pageUrl)+'" target="_blank" rel="noopener">Wikidata ↗</a>');
+  return links.join("");
 }
 
 function imageMarkup(definition){
@@ -273,7 +310,7 @@ function treeBranch(id,nodes,owned){
   const node=nodes.find(x=>x.id===id);
   if(!node)return "";
   const children=nodes.filter(x=>x.parentId===id);
-  return '<div class="tree-branch"><div class="tree-node '+(owned.has(id)?"owned":"")+' '+(node.rarity==="MYTHIC"?"major":"")+'">'+
+  return '<div class="tree-branch"><div class="tree-node '+(owned.has(id)?"owned":"")+' '+(node.rarity==="MYTHIC"?"major":"")+'" data-definition="'+esc(node.id)+'">'+
     '<span class="tree-icon">'+esc(node.icon||"◌")+'</span><div><b>'+esc(node.commonName)+'</b><small>'+esc(node.rank||node.kind)+' · '+esc((RARITY[node.rarity]||{}).label||node.rarity)+'</small></div>'+
     (owned.has(id)?'<i>✓</i>':'')+'</div>'+
     (children.length?'<div class="tree-children">'+children.map(c=>treeBranch(c.id,nodes,owned)).join("")+'</div>':"")+
@@ -314,6 +351,9 @@ function wireCommon(){
   });
   document.querySelectorAll("[data-card-id]").forEach(card=>{
     card.onclick=()=>openOwnedCard(card.dataset.cardId);
+  });
+  document.querySelectorAll("[data-definition]").forEach(node=>{
+    node.onclick=()=>openDefinition(node.dataset.definition);
   });
 }
 
@@ -391,17 +431,44 @@ function openDefinition(id){
   if(d)openCardModal(d,null);
 }
 
-function openCardModal(definition,card){
+function renderCardModal(definition,card){
   const media=getMedia(definition);
+  const knowledge=ui.knowledge.get(definition.id);
+  const live=knowledge&&knowledge!==false?knowledge:null;
+  const summary=live?.wikipedia?.extract||definition.summary||"";
+  const sourceLine=live?.sources?.length?live.sources.join(" · "):"Wikipedia / Wikidata / Lifemap resolving…";
+  const taxId=live?.taxonomy?.ncbiTaxId||null;
+
   cardModalContent.innerHTML=
     '<div class="detail-layout">'+
       '<div class="detail-card">'+(card?cardHtml(card,{interactive:false}):definitionPreview(definition))+'</div>'+
-      '<div class="detail-copy"><span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span><h2>'+esc(definition.commonName)+'</h2><em>'+esc(definition.scientificName)+'</em><p>'+esc(definition.summary||"")+'</p>'+
-        '<dl><div><dt>Type</dt><dd>'+esc(definition.kind)+'</dd></div><div><dt>Rank</dt><dd>'+esc(definition.rank||definition.temporalStatus||"—")+'</dd></div><div><dt>Parent</dt><dd>'+esc(definition.parentId||"Origin")+'</dd></div>'+(definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+'</dl>'+
-        (media&&media.originalUrl?'<a href="'+esc(media.originalUrl)+'" target="_blank" rel="noopener">Image source · '+esc(media.source)+'</a>':"")+
+      '<div class="detail-copy">'+
+        '<span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span>'+
+        '<h2>'+esc(definition.commonName)+'</h2>'+
+        '<em>'+esc(definition.scientificName)+'</em>'+
+        '<p class="knowledge-extract">'+esc(summary)+'</p>'+
+        '<dl>'+
+          '<div><dt>Type</dt><dd>'+esc(definition.kind)+'</dd></div>'+
+          '<div><dt>Rank</dt><dd>'+esc(definition.rank||definition.temporalStatus||"—")+'</dd></div>'+
+          '<div><dt>Parent</dt><dd>'+esc(definition.parentId||"Origin")+'</dd></div>'+
+          (definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+
+          (taxId?'<div><dt>NCBI Taxonomy ID</dt><dd>'+esc(taxId)+'</dd></div>':"")+
+          (live?.wikidata?.id?'<div><dt>Wikidata</dt><dd>'+esc(live.wikidata.id)+'</dd></div>':"")+
+        '</dl>'+
+        '<div class="source-actions">'+knowledgeSourceButtons(live)+'</div>'+
+        '<div class="source-meta"><span>'+esc(sourceLine)+'</span>'+
+          (media&&media.creator?'<small>Image: '+esc(media.creator)+' · '+esc(media.license||"")+'</small>':"")+
+        '</div>'+
       '</div>'+
     '</div>';
+}
+
+function openCardModal(definition,card){
+  renderCardModal(definition,card);
   cardModal.showModal();
+  loadKnowledge(definition).then(()=>{
+    if(cardModal.open)renderCardModal(definition,card);
+  }).catch(()=>{});
 }
 
 async function listCard(cardId){
