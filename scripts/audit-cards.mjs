@@ -148,7 +148,97 @@ function totalDroppable(){
 
 function stats(){
   const total=totalDroppable();
-  let rows=[];
+  const rows=taxonomy.prepare(`
+    SELECT q.status AS status, COUNT(*) AS count
+    FROM drop_pool p
+    JOIN qualitydb.card_quality q ON q.taxon_id = p.taxon_id
+    WHERE q.resolver_version = ?
+    GROUP BY q.status
+    ORDER BY q.status
+  `).all(AUDIT_RESOLVER_VERSION);
+
+  const byStatus=Object.fromEntries(rows.map(row=>[row.status,Number(row.count)]));
+  const checked=Object.values(byStatus).reduce((a,b)=>a+b,0);
+  return {
+    totalDroppable:total,
+    checked,
+    unchecked:Math.max(0,total-checked),
+    ready:byStatus.READY||0,
+    review:byStatus.REVIEW||0,
+    noImage:byStatus.NO_IMAGE||0,
+    badData:byStatus.BAD_DATA||0,
+    error:byStatus.ERROR||0,
+    complete:total>0&&checked>=total,
+    byStatus,
+    resolverVersion:AUDIT_RESOLVER_VERSION,
+    taxonomyScope:taxonomyMeta("scope")||"unknown",
+    taxonomyDataset:taxonomyMeta("dataset_key")||"unknown",
+    taxonomyImportedAt:taxonomyMeta("imported_at")||null,
+  };
+}
+
+function reasonBreakdown(status){
+  return taxonomy.prepare(`
+    SELECT q.reason AS reason, COUNT(*) AS count
+    FROM drop_pool p
+    JOIN qualitydb.card_quality q ON q.taxon_id=p.taxon_id
+    WHERE q.resolver_version=? AND q.status=?
+    GROUP BY q.reason
+    ORDER BY count DESC, q.reason
+    LIMIT 12
+  `).all(AUDIT_RESOLVER_VERSION,status);
+}
+
+function printStats(label="Card quality"){
+  const value=stats();
+  console.log("");
+  console.log(label);
+  console.log("─".repeat(52));
+  console.log(`Droppable taxa : ${value.totalDroppable.toLocaleString()}`);
+  console.log(`Checked        : ${value.checked.toLocaleString()}`);
+  console.log(`READY          : ${value.ready.toLocaleString()}`);
+  console.log(`REVIEW         : ${value.review.toLocaleString()}`);
+  console.log(`NO_IMAGE       : ${value.noImage.toLocaleString()}`);
+  console.log(`BAD_DATA       : ${value.badData.toLocaleString()}`);
+  console.log(`ERROR          : ${value.error.toLocaleString()}`);
+  console.log(`Unchecked      : ${value.unchecked.toLocaleString()}`);
+  console.log(`Complete       : ${value.complete?"yes":"no"}`);
+
+  if(value.review){
+    console.log("");
+    console.log("Top REVIEW reasons");
+    console.log("─".repeat(52));
+    for(const row of reasonBreakdown("REVIEW")){
+      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
+    }
+  }
+
+  if(value.noImage){
+    console.log("");
+    console.log("Top NO_IMAGE reasons");
+    console.log("─".repeat(52));
+    for(const row of reasonBreakdown("NO_IMAGE")){
+      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
+    }
+  }
+
+  return value;
+}
+
+if(statusOnly){
+  const value=printStats();
+  writeFileSync(reportPath,JSON.stringify({
+    generatedAt:new Date().toISOString(),
+    taxonomyPath,
+    qualityPath,
+    ...value,
+  },null,2));
+  taxonomy.close();
+  quality.close();
+  process.exit(0);
+}
+
+let rows=[];
 
 if(auditCollection){
   if(!existsSync(lifecardsPath)){
