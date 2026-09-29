@@ -447,7 +447,9 @@ function drawRadialTree(payload){
   const holder=document.getElementById("radialTreeMap");
   if(!holder||!payload)return;
   holder.classList.remove("loading");
+  const ownedNames=new Set(ui.state.inventory.map(card=>String(card.definition?.scientificName||"").toLowerCase()).filter(Boolean));
   radialMap=new RadialTreeMap(holder,{
+    isOwned:(node)=>ownedNames.has(String(node.scientificName||"").toLowerCase()),
     onFocus:(node)=>focusTree(node.id),
     onSelect:(node)=>openTaxonomyNode(node),
     onHome:()=>focusTree(payload.status?.rootId||ui.taxonomyStatus?.rootId||"animalia"),
