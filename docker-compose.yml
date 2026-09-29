@@ -1,0 +1,16 @@
+services:
+  lifecards:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      LIFECARDS_DB_PATH: /app/data/lifecards.sqlite
+      LIFECARDS_LUCA_DENOMINATOR: 1000000000
+      LIFECARDS_HOLO_RATE: 0.075
+    volumes:
+      - lifecards-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  lifecards-data:
