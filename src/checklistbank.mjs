@@ -184,7 +184,7 @@ export async function remoteGetSubtree(rootId, { depth = 2, childLimit = 30, nod
   let used = 1;
   async function expand(node, level) {
     const output = { ...node, children: [] };
-    if (level >= depth || used >= nodeLimit || Number(node.childCount || 0) === 0) return output;
+    if (level >= depth || used >= nodeLimit) return output;
 
     let children = [];
     try {
@@ -201,6 +201,7 @@ export async function remoteGetSubtree(rootId, { depth = 2, childLimit = 30, nod
     } else {
       output.children = await pool(children, 5, (child) => expand(child, level + 1));
     }
+    output.childCount = Math.max(Number(node.childCount || 0), output.children.length);
     output.truncatedChildren = Math.max(0, Number(node.childCount || 0) - output.children.length);
     return output;
   }
