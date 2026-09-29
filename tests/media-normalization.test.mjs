@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeMediaFileKey, hasCompleteAttribution } from "../src/media.mjs";
+import { normalizeMediaFileKey, hasCompleteAttribution, isLikelyPhotographicMedia } from "../src/media.mjs";
 
 test("Wikimedia batch keys normalize underscores and spaces identically",()=>{
   assert.equal(
@@ -34,4 +34,22 @@ test("attribution placeholders never count as complete",()=>{
     creator:"Jane Doe",
     license:"CC BY 4.0",
   }),true);
+});
+
+
+test("coverage-first visual gate rejects obvious diagrams but accepts photos without attribution",()=>{
+  assert.equal(isLikelyPhotographicMedia({
+    imageUrl:"https://example.test/photo.jpg",
+    title:"Panthera leo in Serengeti",
+  }),true);
+
+  assert.equal(isLikelyPhotographicMedia({
+    imageUrl:"https://example.test/range.svg",
+    title:"Panthera leo range map",
+  }),false);
+
+  assert.equal(isLikelyPhotographicMedia({
+    imageUrl:"https://example.test/image.png",
+    title:"Felidae cladogram diagram",
+  }),false);
 });
