@@ -125,10 +125,17 @@ async function loadMedia(definition){
 
 async function warmMedia(definitions,{rerender=true}={}){
   const unique=[...new Map(definitions.filter(Boolean).map(d=>[d.id,d])).values()];
-  const pending=unique.filter(d=>!ui.media.has(d.id)&&!ui.mediaLoading.has(d.id)).slice(0,18);
+  const pending=unique.filter(d=>!ui.media.has(d.id)&&!ui.mediaLoading.has(d.id)).slice(0,12);
   if(!pending.length)return false;
 
-  await Promise.allSettled(pending.map(loadMedia));
+  const queue=[...pending];
+  const workers=Array.from({length:Math.min(4,queue.length)},async()=>{
+    while(queue.length){
+      const definition=queue.shift();
+      if(definition)await loadMedia(definition);
+    }
+  });
+  await Promise.allSettled(workers);
 
   if(rerender){
     if(revealDialog.open&&ui.reveal)renderReveal();
