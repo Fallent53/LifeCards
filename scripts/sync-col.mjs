@@ -6,6 +6,7 @@ import { resolve, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import unzipper from "unzipper";
 import { parse } from "csv-parse";
+import { catalog } from "../src/catalog.mjs";
 
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 1) {
@@ -30,6 +31,30 @@ const sourceUrl = customUrl || (
     ? "https://download.checklistbank.org/col/latest_dwca.zip"
     : `https://api.checklistbank.org/dataset/${encodeURIComponent(datasetKey)}/archive`
 );
+
+const curatedByScientificName = new Map(
+  catalog.filter((entry) => entry.scientificName)
+    .map((entry) => [String(entry.scientificName).toLowerCase(), entry])
+);
+
+function rarityForRank(rank) {
+  const value = String(rank || "").toLowerCase();
+  if (value === "species") return "COMMON";
+  if (["genus", "subgenus"].includes(value)) return "UNCOMMON";
+  if (["family", "subfamily", "superfamily", "tribe", "subtribe"].includes(value)) return "RARE";
+  if (["order", "suborder", "superorder", "infraorder"].includes(value)) return "SUPER_RARE";
+  if (["class", "subclass", "superclass"].includes(value)) return "ULTRA_RARE";
+  if (["phylum", "subphylum", "superphylum"].includes(value)) return "LEGENDARY";
+  if (["kingdom", "domain"].includes(value)) return "MYTHIC";
+  return null;
+}
+
+function gameRarity(scientificName, canonicalName, rank) {
+  const curated =
+    curatedByScientificName.get(String(scientificName || "").toLowerCase()) ||
+    curatedByScientificName.get(String(canonicalName || "").toLowerCase());
+  return curated?.rarity || rarityForRank(rank);
+}
 
 await mkdir(dirname(outputPath), { recursive: true });
 
@@ -119,14 +144,16 @@ db.exec(`
     extinct INTEGER NOT NULL DEFAULT 0,
     kingdom TEXT,
     source_dataset TEXT,
+    game_rarity TEXT,
+    drop_eligible INTEGER NOT NULL DEFAULT 0,
     child_count INTEGER NOT NULL DEFAULT 0
   );
 `);
 
 const insert = db.prepare(`
   INSERT OR REPLACE INTO taxa
-    (id,parent_id,scientific_name,canonical_name,authorship,rank,status,extinct,kingdom,source_dataset)
-  VALUES (?,?,?,?,?,?,?,?,?,?)
+    (id,parent_id,scientific_name,canonical_name,authorship,rank,status,extinct,kingdom,source_dataset,game_rarity,drop_eligible)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
 `);
 
 let accepted = 0;
@@ -175,10 +202,12 @@ try {
     const extinct = boolExtinct(pick(row, "extinct"));
     const kingdom = pick(row, "kingdom");
     const sourceDataset = pick(row, "datasetid", "sourceid");
+    const rarity = gameRarity(scientificName, canonicalName, rank);
+    const dropEligible = rarity ? 1 : 0;
 
     if (!id || !scientificName) continue;
 
-    insert.run(id, parentId, scientificName, canonicalName, authorship, rank, status, extinct, kingdom, sourceDataset);
+    insert.run(id, parentId, scientificName, canonicalName, authorship, rank, status, extinct, kingdom, sourceDataset, rarity, dropEligible);
     accepted += 1;
     if (rank === "species") species += 1;
     if (scientificName.toLowerCase() === scope.toLowerCase() && (!rootId || rank === "kingdom")) rootId = id;
