@@ -296,6 +296,31 @@ db.exec(`
   UPDATE taxa
   SET child_count = COALESCE((SELECT c FROM child_counts WHERE child_counts.id = taxa.id), 0);
   DROP TABLE child_counts;
+
+  CREATE TABLE drop_pool (
+    rarity TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    taxon_id TEXT NOT NULL,
+    PRIMARY KEY (rarity, slot),
+    UNIQUE (taxon_id)
+  );
+  INSERT INTO drop_pool(rarity, slot, taxon_id)
+  SELECT game_rarity,
+         ROW_NUMBER() OVER (PARTITION BY game_rarity ORDER BY id),
+         id
+  FROM taxa
+  WHERE drop_eligible = 1 AND game_rarity IS NOT NULL;
+
+  CREATE TABLE drop_pool_stats (
+    rarity TEXT PRIMARY KEY,
+    card_count INTEGER NOT NULL
+  );
+  INSERT INTO drop_pool_stats(rarity, card_count)
+  SELECT rarity, COUNT(*)
+  FROM drop_pool
+  GROUP BY rarity;
+
+  CREATE INDEX drop_pool_taxon_idx ON drop_pool(taxon_id);
 `);
 
 if (!rootId && scope.toLowerCase() !== "all") {
@@ -317,6 +342,7 @@ for (const [key, value] of Object.entries({
   species_count: String(species),
   scanned_rows: String(seen),
   root_id: String(rootId || ""),
+  schema_version: "3",
 })) setMeta.run(key, value);
 
 db.exec("PRAGMA optimize;");
