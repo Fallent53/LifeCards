@@ -118,6 +118,16 @@ export function migrate() {
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS quiz_questions_user_idx ON quiz_questions(user_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS pack_audit (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      opened_at INTEGER NOT NULL,
+      payload_json TEXT NOT NULL,
+      prev_hash TEXT,
+      audit_hash TEXT NOT NULL UNIQUE,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS pack_audit_opened_idx ON pack_audit(opened_at DESC);
   `);
   migrateLegacyListingsUniqueConstraint();
 }
@@ -256,6 +266,66 @@ function hydrateCard(row) {
   };
 }
 
+function appendPackAudit(userId, cards, originCard) {
+  const previous = db.prepare(
+    "SELECT audit_hash FROM pack_audit ORDER BY opened_at DESC, rowid DESC LIMIT 1"
+  ).get();
+  const prevHash = previous?.audit_hash || null;
+  const openedAt = nowMs();
+  const payload = {
+    version: 1,
+    userId,
+    openedAt,
+    cards: cards.map((card) => ({
+      cardId: card.id,
+      definitionId: card.definitionId,
+      edition: card.edition,
+      serial: card.serial,
+      serialCap: card.serialCap,
+      finish: card.finish,
+    })),
+    origin: originCard
+      ? {
+          cardId: originCard.id,
+          definitionId: originCard.definitionId,
+          edition: originCard.edition,
+          serial: originCard.serial,
+          serialCap: originCard.serialCap,
+          finish: originCard.finish,
+        }
+      : null,
+  };
+  const payloadJson = JSON.stringify(payload);
+  const auditHash = crypto.createHash("sha256")
+    .update(String(prevHash || "GENESIS"))
+    .update("\n")
+    .update(payloadJson)
+    .digest("hex");
+  const id = uuid();
+  db.prepare(`
+    INSERT INTO pack_audit (id, user_id, opened_at, payload_json, prev_hash, audit_hash)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(id, userId, openedAt, payloadJson, prevHash, auditHash);
+  return { id, openedAt, prevHash, auditHash };
+}
+
+export function getAuditHead() {
+  migrate();
+  const head = db.prepare(
+    "SELECT id, opened_at, prev_hash, audit_hash FROM pack_audit ORDER BY opened_at DESC, rowid DESC LIMIT 1"
+  ).get();
+  const count = Number(db.prepare("SELECT COUNT(*) AS c FROM pack_audit").get().c);
+  return head
+    ? {
+        count,
+        id: head.id,
+        openedAt: Number(head.opened_at),
+        prevHash: head.prev_hash || null,
+        auditHash: head.audit_hash,
+      }
+    : { count: 0, id: null, openedAt: null, prevHash: null, auditHash: null };
+}
+
 export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cryptoRng()) {
   migrate();
   ensureUser(userId);
@@ -272,8 +342,9 @@ export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cr
     const blueprint = generatePackBlueprint({ rng, config });
     const cards = blueprint.cards.map((slot) => issueDefinition(userId, byId.get(slot.definitionId), slot.finish));
     const originCard = blueprint.originTriggered ? issueLuca(userId) : null;
+    const audit = appendPackAudit(userId, cards, originCard);
     db.exec("COMMIT");
-    return { cards, originCard };
+    return { cards, originCard, audit };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -496,6 +567,7 @@ export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
     profile: profileStats(userId, inventory),
     market: listMarket(),
     auctions: listAuctions(),
+    audit: getAuditHead(),
     catalog: publicCatalog(),
     config: { packIntervalMs: config.packIntervalMs, cardsPerPack: config.cardsPerPack, maxStoredPacks: config.maxStoredPacks, holoRate: config.holoRate, lucaRarityLabel: "UNKNOWN" },
   };
@@ -739,7 +811,7 @@ export function purgeExpiredExternalCache() {
 }
 
 export function resetForTests() {
-  db.exec("DELETE FROM auction_bids; DELETE FROM auctions; DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
+  db.exec("DELETE FROM pack_audit; DELETE FROM auction_bids; DELETE FROM auctions; DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
 }
 
 migrate();
