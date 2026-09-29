@@ -456,7 +456,7 @@ function drawRadialTree(payload){
     isOwned:(node)=>ownedNames.has(String(node.scientificName||"").toLowerCase()),
     onFocus:(node)=>focusTree(node.id),
     onSelect:(node)=>openTaxonomyNode(node),
-    onHome:()=>focusTree(payload.status?.rootId||ui.taxonomyStatus?.rootId||"animalia"),
+    onHome:()=>focusTree(payload.status?.mapRootId||ui.taxonomyStatus?.mapRootId||"luca"),
     onUp:(current)=>{
       const path=current?.path||[];
       const parent=path.length>1?path[path.length-2]:null;
@@ -553,7 +553,7 @@ function renderTree(){
     drawRadialTree(ui.treePayload);
     renderTreeBreadcrumb(ui.treePayload);
   }else{
-    focusTree(status?.rootId||"");
+    focusTree(status?.mapRootId||status?.rootId||"luca");
   }
 }
 
