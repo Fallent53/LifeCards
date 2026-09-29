@@ -107,7 +107,7 @@ function cardQualityStatus() {
   const expectedScope = gameplayDb ? String(metaValue(gameplayDb, "scope") || "") : "";
   const auditedScope = String(metaValue(db, "taxonomy_scope") || "");
   const resolverVersion = String(metaValue(db, "resolver_version") || "");
-  const expectedResolver = "v5-wikipedia-batched";
+  const expectedResolver = "v6-clean-names-exact-wikipedia";
   const compatible =
     Boolean(expectedScope) &&
     auditedScope.toLowerCase() === expectedScope.toLowerCase() &&
