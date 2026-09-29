@@ -104,6 +104,8 @@ db.exec(`
     parent_id TEXT,
     scientific_name TEXT NOT NULL,
     canonical_name TEXT,
+    common_name TEXT,
+    common_name_priority INTEGER NOT NULL DEFAULT -1,
     authorship TEXT,
     rank TEXT,
     status TEXT,
@@ -186,11 +188,58 @@ try {
   throw error;
 }
 
+console.log("Importing vernacular names when available…");
+try {
+  const directory = await unzipper.Open.file(archivePath);
+  const vernacularEntry = directory.files.find((entry) => /(^|\/)(vernacular(name)?|commonname).*\.txt$/i.test(entry.path));
+  if (vernacularEntry) {
+    const updateCommon = db.prepare(`
+      UPDATE taxa
+      SET common_name = ?, common_name_priority = ?
+      WHERE id = ? AND ? > common_name_priority
+    `);
+    let namesApplied = 0;
+    db.exec("BEGIN");
+    const parser = vernacularEntry.stream().pipe(parse({
+      columns: true,
+      delimiter: "\t",
+      relax_column_count: true,
+      relax_quotes: true,
+      bom: true,
+      skip_empty_lines: true,
+    }));
+    for await (const raw of parser) {
+      const row = normalizedRecord(raw);
+      const taxonId = pick(row, "taxonid", "nameusageid", "id");
+      const name = pick(row, "vernacularname", "commonname", "name");
+      const language = pick(row, "language", "languagecode").toLowerCase();
+      if (!taxonId || !name) continue;
+      const priority = /^(en|eng|english)/.test(language) ? 3
+        : /^(fr|fra|fre|french)/.test(language) ? 2
+        : language ? 0 : 1;
+      const result = updateCommon.run(name, priority, taxonId, priority);
+      if (Number(result.changes || 0) > 0) namesApplied += 1;
+      if (namesApplied && namesApplied % 50000 === 0) {
+        db.exec("COMMIT; BEGIN");
+        console.log(`Applied ${namesApplied.toLocaleString()} vernacular names…`);
+      }
+    }
+    db.exec("COMMIT");
+    console.log(`Applied ${namesApplied.toLocaleString()} preferred vernacular names.`);
+  } else {
+    console.log("No vernacular-name extension found; scientific names remain searchable.");
+  }
+} catch (error) {
+  try { db.exec("ROLLBACK"); } catch {}
+  console.warn(`Vernacular-name import skipped: ${error.message}`);
+}
+
 console.log("Building indexes and child counts…");
 db.exec(`
   CREATE INDEX taxa_parent_idx ON taxa(parent_id);
   CREATE INDEX taxa_scientific_idx ON taxa(scientific_name COLLATE NOCASE);
   CREATE INDEX taxa_canonical_idx ON taxa(canonical_name COLLATE NOCASE);
+  CREATE INDEX taxa_common_idx ON taxa(common_name COLLATE NOCASE);
   CREATE INDEX taxa_rank_idx ON taxa(rank);
   CREATE TEMP TABLE child_counts AS
     SELECT parent_id AS id, COUNT(*) AS c
