@@ -95,9 +95,21 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.storedAt < CACHE_TTL_MS) return cached.value;
 
-  const page = await wikipediaPage(normalized, lang);
+  let page = null;
+  try {
+    page = await wikipediaPage(normalized, lang);
+  } catch {
+    page = null;
+  }
+
   const qid = page?.pageprops?.wikibase_item ?? null;
-  const entity = await wikidataEntity(qid, lang);
+  let entity = null;
+  try {
+    entity = await wikidataEntity(qid, lang);
+  } catch {
+    entity = null;
+  }
+
   const taxId = claimValue(entity, "P685");
   const taxonName = claimValue(entity, "P225") || normalized;
   const description =
@@ -143,10 +155,16 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     media,
     sources: [
       page ? "Wikipedia" : null,
-      qid ? "Wikidata" : null,
+      entity ? "Wikidata" : null,
       media ? "Wikimedia Commons" : null,
       taxId ? "NCBI Taxonomy / Lifemap NCBI" : null,
     ].filter(Boolean),
+    sourceStatus: {
+      wikipedia: page ? "ok" : "unavailable",
+      wikidata: entity ? "ok" : "unavailable",
+      media: media ? "ok" : "unavailable",
+      lifemap: taxId ? "linked" : "unresolved",
+    },
     resolvedAt: new Date().toISOString(),
   };
 
