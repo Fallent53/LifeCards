@@ -881,6 +881,18 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
     "species","subspecies","variety","subvariety","form","subform","strain"
   ].includes(rankKey);
 
+  if(!speciesLike){
+    try{
+      const broadCommons=await searchCommonsImage(query,{exact:false});
+      if(broadCommons)return {
+        ...broadCommons,
+        resolver:"commons-broad-representative",
+        confidence:"LOW",
+        mediaMatch:"BROAD_REPRESENTATIVE",
+      };
+    }catch{}
+  }
+
   if(speciesLike&&!extinct){
     try{
       const inat=await searchINaturalistImage(query,{
@@ -998,9 +1010,17 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
     };
   }catch{}
 
-  // Prototype-only last chance: exact real iNaturalist photo under a
-  // non-commercial Creative Commons license. It can be displayed locally,
-  // but it is never inserted into the commercial READY drop pool.
+  // Last chance for species and awkward names: broad Commons search.
+  try{
+    const broadCommons=await searchCommonsImage(query,{exact:false});
+    if(broadCommons)return {
+      ...broadCommons,
+      resolver:"commons-broad-fallback",
+      confidence:"LOW",
+      mediaMatch:"BROAD_QUERY",
+    };
+  }catch{}
+
   try{
     const exactTaxonPhoto=await searchINaturalistTaxonPhoto(query,{
       rank,

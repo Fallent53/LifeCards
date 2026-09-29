@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v13";
+const CACHE_SCHEMA_VERSION = "v14-aggressive-media";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -329,7 +329,11 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     try{
       const supplemental=await searchSupplementalRealMedia(
         taxonName||normalized,
-        {rank:looksLikeSpecies?"species":"",extinct:false}
+        {
+          rank:looksLikeSpecies?"species":"",
+          extinct:false,
+          wikidataId:qid,
+        }
       );
       if(supplemental){
         bestCandidate=chooseBestMediaCandidate([
@@ -402,6 +406,55 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
 }
 
 
+function cacheMergedKnowledge(query,lang,value){
+  const normalized=String(query||"").trim().toLowerCase();
+  if(!normalized||!value)return;
+  const persistedQuery=`${CACHE_SCHEMA_VERSION}:${normalized}`;
+  cache.set(`${lang}:${persistedQuery}`,{storedAt:Date.now(),value});
+  writePersistentCache(persistedQuery,lang,value);
+}
+
+async function representativeMediaFallback(base,item,{lang="en"}={}){
+  if(base?.media?.imageUrl)return base;
+
+  for(const representativeQuery of item.fallbackQueries||[]){
+    try{
+      const media=await searchCommonsImage(representativeQuery,{exact:false});
+      if(!media?.imageUrl)continue;
+
+      const merged={
+        ...(base||{}),
+        query:item.query,
+        media:{
+          ...media,
+          resolver:"commons-descendant-representative",
+          confidence:"LOW",
+          mediaMatch:"REPRESENTATIVE_DESCENDANT_LOCAL",
+          representativeTaxon:representativeQuery,
+          representativeFor:item.query,
+        },
+        sources:[
+          ...new Set([
+            ...(base?.sources||[]),
+            media.source||"Wikimedia Commons",
+            "Catalogue of Life representative descendant",
+          ]),
+        ],
+        sourceStatus:{
+          ...(base?.sourceStatus||{}),
+          media:"representative-descendant",
+        },
+        resolvedAt:new Date().toISOString(),
+      };
+
+      cacheMergedKnowledge(item.query,lang,merged);
+      return merged;
+    }catch{}
+  }
+
+  return base;
+}
+
 export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 } = {}) {
   const normalized = [];
   const seen = new Set();
@@ -411,7 +464,16 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
     const query = String(entry?.query ?? "").trim();
     if (!id || !query || seen.has(id)) continue;
     seen.add(id);
-    normalized.push({ id, query });
+    normalized.push({
+      id,
+      query,
+      rank:String(entry?.rank||""),
+      fallbackQueries:[...new Set(
+        (Array.isArray(entry?.fallbackQueries)?entry.fallbackQueries:[])
+          .map((value)=>String(value||"").trim())
+          .filter((value)=>value&&value.toLowerCase()!==query.toLowerCase())
+      )].slice(0,4),
+    });
     if (normalized.length >= 24) break;
   }
 
@@ -423,9 +485,10 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
     while (cursor < normalized.length) {
       const item = normalized[cursor++];
       try {
-        output[item.id] = await getKnowledge(item.query, { lang });
+        const base=await getKnowledge(item.query,{lang});
+        output[item.id]=await representativeMediaFallback(base,item,{lang});
       } catch {
-        output[item.id] = null;
+        output[item.id]=await representativeMediaFallback(null,item,{lang});
       }
     }
   }

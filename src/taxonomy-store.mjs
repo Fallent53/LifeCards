@@ -527,6 +527,89 @@ export function getGameplayTaxon(id) {
   return selectTaxon(db, id);
 }
 
+export function getRepresentativeMediaQueries(taxonId, scientificName = "", limit = 4) {
+  const db=openGameplayDb();
+  if(!db)return [];
+
+  const root=
+    selectTaxon(db,String(taxonId||"")) ||
+    findTaxonByScientificName(db,String(scientificName||""));
+  if(!root)return [];
+  if(String(root.rank||"").toLowerCase()==="species")return [];
+
+  const safeLimit=Math.max(1,Math.min(8,Number(limit)||4));
+  const rankScore={
+    species:0,
+    subspecies:1,
+    genus:2,
+    subgenus:3,
+    family:4,
+    subfamily:5,
+    order:6,
+    class:7,
+    phylum:8,
+    kingdom:9,
+  };
+
+  const visited=new Set([String(root.id)]);
+  const candidates=[];
+  let frontier=[String(root.id)];
+
+  for(let depth=1;depth<=8&&frontier.length;depth+=1){
+    const placeholders=frontier.map(()=>"?").join(",");
+    const rows=db.prepare(`
+      SELECT
+        id,parent_id,scientific_name,canonical_name,rank,
+        child_count,descendant_species_count
+      FROM taxa
+      WHERE parent_id IN (${placeholders})
+      ORDER BY
+        descendant_species_count DESC,
+        child_count DESC,
+        scientific_name
+      LIMIT 64
+    `).all(...frontier);
+
+    if(!rows.length)break;
+
+    for(const row of rows){
+      const id=String(row.id);
+      if(visited.has(id))continue;
+      visited.add(id);
+
+      const name=String(row.canonical_name||row.scientific_name||"").trim();
+      if(name){
+        candidates.push({
+          name,
+          depth,
+          rank:String(row.rank||"").toLowerCase(),
+          descendants:Number(row.descendant_species_count||0),
+        });
+      }
+    }
+
+    frontier=rows
+      .filter((row)=>Number(row.child_count||0)>0)
+      .slice(0,16)
+      .map((row)=>String(row.id));
+
+    if(candidates.filter((item)=>["species","subspecies","genus","subgenus"].includes(item.rank)).length>=safeLimit*2){
+      break;
+    }
+  }
+
+  return [...new Map(
+    candidates
+      .sort((a,b)=>
+        (rankScore[a.rank]??20)-(rankScore[b.rank]??20) ||
+        a.depth-b.depth ||
+        b.descendants-a.descendants ||
+        a.name.localeCompare(b.name)
+      )
+      .map((item)=>[item.name.toLowerCase(),item.name])
+  ).values()].slice(0,safeLimit);
+}
+
 export function pickDropTaxon(rarity, rng) {
   const db = openGameplayDb();
   if (!db || !tableExists(db, "drop_pool")) return null;
