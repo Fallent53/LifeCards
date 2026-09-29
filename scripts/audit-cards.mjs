@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getKnowledge } from "../src/knowledge.mjs";
+import { getAuditKnowledgeBatch } from "../src/knowledge.mjs";
 
 const args=new Map();
 for(let i=2;i<process.argv.length;i+=1){
@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v4-wikipedia-direct-retry";
+const AUDIT_RESOLVER_VERSION="v5-wikipedia-batched";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -293,26 +293,29 @@ function classify(row,knowledge){
   };
 }
 
-let cursor=0;
 let processed=0;
 const runStarted=Date.now();
+const auditBatchSize=Math.max(10,Math.min(50,Number(args.get("batch-size")||40)));
 
-async function worker(){
-  while(cursor<rows.length){
-    const index=cursor++;
-    const row=rows[index];
-    let knowledge=null;
-    let classification=null;
+for(let offset=0;offset<rows.length;offset+=auditBatchSize){
+  const chunk=rows.slice(offset,offset+auditBatchSize);
+  const entries=chunk.map((row)=>({
+    id:String(row.id),
+    query:String(row.canonical_name||row.scientific_name||"").trim(),
+  }));
 
-    try{
-      const imageQuery=String(row.canonical_name||row.scientific_name||"").trim();
-      knowledge=await getKnowledge(imageQuery,{lang:"en"});
-      classification=classify(row,knowledge);
-    }catch(error){
-      classification={status:"ERROR",reason:String(error?.message||error)};
-    }
+  let resolved={};
+  try{
+    resolved=await getAuditKnowledgeBatch(entries,{lang:"en"});
+  }catch{
+    resolved={};
+  }
 
+  for(const row of chunk){
+    const knowledge=resolved[String(row.id)]||null;
+    const classification=classify(row,knowledge);
     const media=knowledge?.media||null;
+
     upsert.run(
       String(row.id),
       row.scientific_name,
@@ -339,11 +342,11 @@ async function worker(){
       `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${row.canonical_name||row.scientific_name} · ${media?.resolver||"no-media"}`
     );
   }
-}
 
-await Promise.all(
-  Array.from({length:Math.min(concurrency,rows.length)},()=>worker())
-);
+  if(offset+auditBatchSize<rows.length){
+    await new Promise((resolve)=>setTimeout(resolve,180));
+  }
+}
 
 const finalStats=stats();
 
