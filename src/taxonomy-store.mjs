@@ -477,6 +477,10 @@ export function pickDropTaxon(rarity, rng) {
       return mapRow(row);
     }
 
+    // Option A: once the real gameplay taxonomy is active, packs are
+    // strictly media-gated. Never draw from the raw taxonomy pool.
+    return null;
+
     const stat = db
       .prepare("SELECT card_count FROM drop_pool_stats WHERE rarity = ?")
       .get(String(rarity));
