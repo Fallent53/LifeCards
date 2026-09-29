@@ -17,6 +17,7 @@ const ui={
   collectionPage:0,
   collectionPageSize:30,
   collectionRequestToken:0,
+  marketScope:"MARKET",
   marketFilter:"ALL",
   marketSort:"NEWEST",
   marketQuery:"",
@@ -27,6 +28,8 @@ const ui={
   marketRequestToken:0,
   supplyCache:new Map(),
   supplyLoading:new Set(),
+  provenanceCache:new Map(),
+  provenanceLoading:new Set(),
   query:"",
   codexQuery:"",
   codexResults:[],
@@ -103,6 +106,24 @@ function liveNextPackMs(){
   if(!ui.state)return 0;
   if(ui.state.user.packs>=ui.state.user.maxPacks)return 0;
   return Math.max(0,ui.state.user.nextPackInMs-(Date.now()-ui.stateFetchedAt));
+}
+
+function provenanceFor(cardId){
+  return ui.provenanceCache.get(String(cardId))||null;
+}
+
+async function loadProvenance(cardId){
+  const key=String(cardId||"");
+  if(!key||ui.provenanceCache.has(key)||ui.provenanceLoading.has(key))return;
+  ui.provenanceLoading.add(key);
+  try{
+    const result=await api("/api/cards/provenance?cardId="+encodeURIComponent(key));
+    ui.provenanceCache.set(key,result.provenance||null);
+  }catch{
+    ui.provenanceCache.set(key,null);
+  }finally{
+    ui.provenanceLoading.delete(key);
+  }
 }
 
 function supplyFor(definitionId,edition){
@@ -839,6 +860,7 @@ function renderCollectionStackDetail(group,copies){
 
 function marketQueryString(){
   const params=new URLSearchParams({
+    scope:ui.marketScope,
     filter:ui.marketFilter,
     q:ui.marketQuery.trim(),
     sort:ui.marketSort,
