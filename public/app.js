@@ -168,6 +168,15 @@ function imageMarkup(definition){
   const initials=(definition.commonName||definition.scientificName||"?").split(/\s+/).slice(0,2).map(x=>x[0]).join("");
   return '<div class="art-fallback"><span>'+esc(definition.icon||"◌")+'</span><b>'+esc(initials)+'</b></div>';
 }
+function cardSummary(definition){
+  const knowledge=ui.knowledge.get(definition.id);
+  const live=knowledge&&knowledge!==false
+    ? (knowledge.wikipedia?.description||knowledge.wikipedia?.extract||"")
+    : "";
+  const text=String(live||definition.summary||"").replace(/\s+/g," ").trim();
+  if(text.length<=155)return text;
+  return text.slice(0,152).replace(/\s+\S*$/,"")+"…";
+}
 
 function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
   const d=card.definition||card;
@@ -191,7 +200,7 @@ function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
       '</div>'+
       '<div class="card-copy">'+
         '<div class="card-title-row"><div><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em></div><button class="favorite '+(ui.favorites.has(d.id)?"active":"")+'" data-favorite="'+esc(d.id)+'" aria-label="Favorite">'+(ui.favorites.has(d.id)?"★":"☆")+'</button></div>'+
-        '<p>'+esc(d.summary||"")+'</p>'+
+        '<p>'+esc(cardSummary(d))+'</p>'+
         '<div class="card-bottom">'+
           '<span class="edition '+editionClass(card.edition||"")+'">'+esc(card.edition||d.rank||d.kind)+'</span>'+
           '<b>'+((card.serial||card.serial===0)?serial(card):esc(d.rank||""))+'</b>'+
