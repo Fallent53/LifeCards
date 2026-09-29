@@ -206,7 +206,7 @@ export function searchTaxa(query, limit = 30) {
     try {
       const rows = db.prepare(`
         SELECT t.id,t.parent_id,t.scientific_name,t.canonical_name,t.common_name,
-               t.rank,t.status,t.extinct,t.child_count
+               t.rank,t.status,t.extinct,t.child_count,t.descendant_species_count
         FROM taxa_fts f
         JOIN taxa t ON t.id = f.id
         WHERE taxa_fts MATCH ?
