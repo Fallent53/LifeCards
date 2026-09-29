@@ -5,7 +5,8 @@ import { rmSync } from "node:fs";
 
 const gamePath="/tmp/lifecards-taxonomy-game.sqlite";
 const mapPath="/tmp/lifecards-taxonomy-map.sqlite";
-for(const path of [gamePath,mapPath]){
+const qualityPath="/tmp/lifecards-card-quality.sqlite";
+for(const path of [gamePath,mapPath,qualityPath]){
   try{rmSync(path,{force:true});}catch{}
 }
 
@@ -66,7 +67,8 @@ function makeDb(path,{scope,rootId,rows,withDropPool=false}){
         card_count INTEGER NOT NULL
       );
       INSERT INTO drop_pool(rarity,slot,taxon_id) VALUES ('COMMON',1,'game-species');
-      INSERT INTO drop_pool_stats(rarity,card_count) VALUES ('COMMON',1);
+      INSERT INTO drop_pool(rarity,slot,taxon_id) VALUES ('COMMON',2,'game-unready');
+      INSERT INTO drop_pool_stats(rarity,card_count) VALUES ('COMMON',2);
     `);
   }
   db.close();
@@ -79,6 +81,7 @@ makeDb(gamePath,{
   rows:[
     {id:"game-animalia",scientificName:"Animalia",rank:"kingdom",childCount:1,descendantSpeciesCount:1,gameRarity:"MYTHIC"},
     {id:"game-species",parentId:"game-animalia",scientificName:"Testus animalis",rank:"species",descendantSpeciesCount:1,gameRarity:"COMMON"},
+    {id:"game-unready",parentId:"game-animalia",scientificName:"Wrongus imagus",rank:"species",descendantSpeciesCount:1,gameRarity:"COMMON"},
   ],
 });
 
@@ -97,8 +100,34 @@ makeDb(mapPath,{
   ],
 });
 
+const qualityDb=new DatabaseSync(qualityPath);
+qualityDb.exec(`
+  CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+  INSERT INTO meta(key,value) VALUES ('complete','1');
+  CREATE TABLE card_quality(
+    taxon_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL
+  );
+  INSERT INTO card_quality(taxon_id,status) VALUES ('game-species','READY');
+  INSERT INTO card_quality(taxon_id,status) VALUES ('game-unready','REVIEW');
+  CREATE TABLE ready_drop_pool(
+    rarity TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    taxon_id TEXT NOT NULL,
+    PRIMARY KEY(rarity,slot)
+  );
+  INSERT INTO ready_drop_pool(rarity,slot,taxon_id) VALUES ('COMMON',1,'game-species');
+  CREATE TABLE ready_drop_pool_stats(
+    rarity TEXT PRIMARY KEY,
+    card_count INTEGER NOT NULL
+  );
+  INSERT INTO ready_drop_pool_stats(rarity,card_count) VALUES ('COMMON',1);
+`);
+qualityDb.close();
+
 process.env.LIFECARDS_TAXONOMY_DB=gamePath;
 process.env.LIFECARDS_MAP_TAXONOMY_DB=mapPath;
+process.env.LIFECARDS_CARD_QUALITY_DB=qualityPath;
 
 const taxonomy=await import("../src/taxonomy-store.mjs");
 
@@ -109,7 +138,11 @@ test("full-life map and gameplay drop taxonomy remain separate",()=>{
   assert.equal(status.mapScope,"all");
   assert.equal(status.dropScope,"Animalia");
   assert.equal(status.dropPoolReady,true);
-  assert.equal(status.dropPool.COMMON,1);
+  assert.equal(status.dropPool.COMMON,2);
+  assert.equal(status.cardQuality.complete,true);
+  assert.equal(status.cardQuality.ready,1);
+  assert.equal(status.cardQuality.review,1);
+  assert.equal(status.cardQuality.readyPoolActive,true);
 });
 
 test("map lookups use full-life database while gameplay resolution uses Animalia",()=>{
@@ -118,10 +151,11 @@ test("map lookups use full-life database while gameplay resolution uses Animalia
   assert.equal(taxonomy.getGameplayTaxon("game-animalia")?.scientificName,"Animalia");
 });
 
-test("drop selection never reads the full-life map pool",()=>{
+test("drop selection uses only READY cards after a complete audit",()=>{
   const picked=taxonomy.pickDropTaxon("COMMON",{int:()=>0});
   assert.equal(picked?.id,"game-species");
   assert.equal(picked?.scientificName,"Testus animalis");
+  assert.notEqual(picked?.id,"game-unready");
 });
 
 test("LUCA map exposes the three domains from full-life taxonomy",()=>{
