@@ -187,6 +187,19 @@ export function ncbiTaxonomyUrl(taxId) {
 
 export async function fetchNcbi(definition, { fetchImpl = fetch } = {}) {
   const key = definition.id;
+
+  // LUCA is a biological hypothesis/concept, not a single NCBI Taxonomy node.
+  // Never manufacture or infer a taxid for the unique Origin card.
+  if (definition.kind === "origin") {
+    return {
+      provider: "NCBI Taxonomy",
+      available: false,
+      taxId: null,
+      lifemapUrl: null,
+      ncbiUrl: null,
+      reason: "LUCA is not represented as a single NCBI Taxonomy node.",
+    };
+  }
   const cached = getExternalCache("ncbi-taxonomy", key);
   if (cached) return { ...cached.value, cached: true };
 
