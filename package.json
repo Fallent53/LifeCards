@@ -11,9 +11,10 @@
     "check": "node --check server.mjs && node --check src/game-engine.mjs && node --check src/database.mjs && node --check src/definitions.mjs && node --check src/taxonomy-store.mjs && node --check src/knowledge.mjs && node --check public/app.js && node --check public/radial-tree.js && node --check scripts/sync-col.mjs",
     "sync:knowledge": "node scripts/sync-knowledge.mjs",
     "sync:col": "node scripts/sync-col.mjs --scope Animalia",
-    "sync:col:all": "node scripts/sync-col.mjs --scope all --output ./data/life.sqlite",
+    "sync:col:all": "npm run sync:map",
     "prefetch:cards": "node scripts/prefetch-cards.mjs",
-    "prefetch:catalog": "node scripts/prefetch-cards.mjs --catalog"
+    "prefetch:catalog": "node scripts/prefetch-cards.mjs --catalog",
+    "sync:map": "node scripts/sync-col.mjs --scope all --output ./data/life.sqlite --map-only true"
   },
   "engines": {
     "node": ">=22.5.0"
