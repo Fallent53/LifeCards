@@ -198,3 +198,10 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .art-loading i{position:absolute;left:50%;top:50%;width:68px;height:1px;background:#65df9828;transform:translate(-50%,-50%) rotate(-24deg);box-shadow:0 12px 0 #65df9818,-10px -12px 0 #65df9815}
 .art-fallback small{position:absolute;left:10px;right:10px;bottom:10px;text-align:center;color:#9bb0a2;font-size:6px;letter-spacing:.06em;text-transform:uppercase}
 @keyframes artShimmer{to{background-position:-260% 0}}
+
+.tree-head-actions{display:flex;flex-direction:column;gap:8px;align-items:stretch;min-width:min(420px,36vw)}
+.origin-beacon{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid #6f55a8;border-radius:12px;background:radial-gradient(circle at 15% 20%,#33234d,#120f1a 65%);text-align:left}
+.origin-beacon>span{display:grid;place-items:center;width:30px;height:30px;border:1px dashed #9d7ad0;border-radius:50%;color:#c4a1ff}
+.origin-beacon small{display:block;color:#a988d8;font-size:7px;letter-spacing:.13em}.origin-beacon b{display:block;margin-top:2px;font-size:9px}
+.origin-beacon:hover{border-color:#a886d9;box-shadow:0 0 28px #8964c524}
+@media(max-width:1000px){.tree-head-actions{width:100%;min-width:0}.origin-beacon{width:100%}}
