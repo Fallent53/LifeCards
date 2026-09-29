@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getWikimediaArticleMediaBatch } from "../src/knowledge.mjs";
+import { getCoverageMediaBatch } from "../src/knowledge.mjs";
 
 const args=new Map();
 for(let i=2;i<process.argv.length;i+=1){
@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v17-wikimaster-wikimedia";
+const AUDIT_RESOLVER_VERSION="v18-coverage-first";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const auditCollection=args.get("collection")==="true";
@@ -116,6 +116,26 @@ quality.exec(`
   );
   CREATE INDEX IF NOT EXISTS card_quality_status_idx ON card_quality(status);
   CREATE INDEX IF NOT EXISTS card_quality_rarity_status_idx ON card_quality(rarity,status);
+  CREATE TABLE IF NOT EXISTS media_index(
+    taxon_id TEXT PRIMARY KEY,
+    scientific_name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    provider TEXT,
+    provider_taxon_id TEXT,
+    image_url TEXT NOT NULL,
+    thumbnail_url TEXT,
+    source_url TEXT,
+    media_type TEXT NOT NULL DEFAULT 'image',
+    exactness TEXT,
+    score INTEGER NOT NULL DEFAULT 0,
+    resolver TEXT,
+    confidence TEXT,
+    creator TEXT,
+    license TEXT,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS media_index_normalized_name_idx ON media_index(normalized_name);
+  CREATE INDEX IF NOT EXISTS media_index_score_idx ON media_index(score DESC);
   CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -128,6 +148,39 @@ const qualityColumns=new Set(
 if(!qualityColumns.has("resolver_version")){
   quality.exec("ALTER TABLE card_quality ADD COLUMN resolver_version TEXT");
 }
+
+quality.exec(`
+  INSERT OR IGNORE INTO media_index(
+    taxon_id,scientific_name,normalized_name,provider,image_url,thumbnail_url,
+    source_url,media_type,exactness,score,resolver,confidence,creator,license,updated_at
+  )
+  SELECT
+    taxon_id,
+    scientific_name,
+    lower(trim(scientific_name)),
+    media_source,
+    media_url,
+    media_url,
+    wikipedia_url,
+    'image',
+    CASE upper(COALESCE(media_confidence,''))
+      WHEN 'HIGH' THEN 'EXACT_OR_STRONG'
+      WHEN 'MEDIUM' THEN 'REPRESENTATIVE_OR_MEDIUM'
+      ELSE 'UNKNOWN'
+    END,
+    CASE upper(COALESCE(media_confidence,''))
+      WHEN 'HIGH' THEN 100
+      WHEN 'MEDIUM' THEN 70
+      ELSE 40
+    END,
+    media_resolver,
+    media_confidence,
+    media_creator,
+    media_license,
+    checked_at
+  FROM card_quality
+  WHERE media_url IS NOT NULL AND trim(media_url)<>'';
+`);
 
 try{
   taxonomy.prepare("ATTACH DATABASE ? AS qualitydb").run(qualityPath);
@@ -335,6 +388,40 @@ if(!rows.length){
   process.exit(0);
 }
 
+const mediaIndexUpsert=quality.prepare(`
+  INSERT INTO media_index(
+    taxon_id,scientific_name,normalized_name,provider,provider_taxon_id,
+    image_url,thumbnail_url,source_url,media_type,exactness,score,
+    resolver,confidence,creator,license,updated_at
+  )
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(taxon_id) DO UPDATE SET
+    scientific_name=excluded.scientific_name,
+    normalized_name=excluded.normalized_name,
+    provider=excluded.provider,
+    provider_taxon_id=excluded.provider_taxon_id,
+    image_url=excluded.image_url,
+    thumbnail_url=excluded.thumbnail_url,
+    source_url=excluded.source_url,
+    media_type=excluded.media_type,
+    exactness=excluded.exactness,
+    score=excluded.score,
+    resolver=excluded.resolver,
+    confidence=excluded.confidence,
+    creator=excluded.creator,
+    license=excluded.license,
+    updated_at=excluded.updated_at
+`);
+
+const cachedMediaByTaxon=quality.prepare(`
+  SELECT *
+  FROM media_index
+  WHERE taxon_id=?
+     OR normalized_name=lower(trim(?))
+  ORDER BY CASE WHEN taxon_id=? THEN 0 ELSE 1 END, score DESC
+  LIMIT 1
+`);
+
 const upsert=quality.prepare(`
   INSERT INTO card_quality(
     taxon_id,scientific_name,common_name,rank,rarity,status,reason,
@@ -388,35 +475,22 @@ function classify(row,knowledge){
 
   const media=knowledge?.media||null;
   if(!media?.imageUrl){
-    return {status:"NO_IMAGE",reason:"no free Wikipedia article image resolved"};
-  }
-
-  if(media.resolver!=="wikipedia-pageimage-free"){
-    return {status:"REVIEW",reason:"non-Wikipedia media excluded from gameplay"};
+    return {status:"NO_IMAGE",reason:"no usable image resolved"};
   }
 
   if(!looksLikeRealMedia(media)){
     return {status:"REVIEW",reason:"non-photographic media rejected for gameplay"};
   }
 
-  const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
-  if(!requiredAttribution){
-    return {status:"REVIEW",reason:"image found but attribution metadata incomplete"};
-  }
-
+  const match=String(media.mediaMatch||"").toUpperCase();
   const confidence=String(media.confidence||"LOW").toUpperCase();
-  if(confidence==="HIGH"||confidence==="MEDIUM"){
-    return {
-      status:"READY",
-      reason:confidence==="HIGH"
-        ?"high-confidence taxon-linked licensed image"
-        :"licensed attributed image accepted for gameplay (medium confidence)"
-    };
-  }
+  const representative=match.includes("REPRESENTATIVE")||match.includes("DESCENDANT");
 
   return {
-    status:"REVIEW",
-    reason:`image requires review (${media.resolver||"unknown resolver"} / ${confidence})`,
+    status:"READY",
+    reason:representative
+      ?"coverage-first representative image accepted for prototype"
+      :`coverage-first image accepted (${media.resolver||"unknown resolver"} / ${confidence})`,
   };
 }
 
@@ -455,17 +529,73 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
     extinct:Boolean(row.extinct),
   }));
 
-  let resolved={};
-  try{
-    resolved=await getWikimediaArticleMediaBatch(entries);
-  }catch{
-    resolved={};
+  const resolved={};
+  const missingEntries=[];
+
+  for(const entry of entries){
+    const row=chunk.find((candidate)=>String(candidate.id)===entry.id);
+    const cached=cachedMediaByTaxon.get(entry.id,entry.query,entry.id);
+    if(cached?.image_url){
+      resolved[entry.id]={
+        query:entry.query,
+        media:{
+          imageUrl:cached.image_url,
+          originalUrl:cached.source_url||cached.image_url,
+          source:cached.provider||"LifeCards local media index",
+          resolver:cached.resolver||"local-media-index",
+          confidence:cached.confidence||"MEDIUM",
+          creator:cached.creator||null,
+          license:cached.license||null,
+          mediaMatch:cached.exactness||null,
+          providerTaxonId:cached.provider_taxon_id||null,
+          cached:true,
+        },
+        sourceStatus:{media:"cached"},
+      };
+    }else{
+      missingEntries.push(entry);
+    }
+  }
+
+  if(missingEntries.length){
+    try{
+      Object.assign(resolved,await getCoverageMediaBatch(missingEntries));
+    }catch{
+      // Individual rows remain NO_IMAGE/ERROR; cached rows are still usable.
+    }
   }
 
   for(const row of chunk){
     const knowledge=resolved[String(row.id)]||null;
     const classification=classify(row,knowledge);
     const media=knowledge?.media||null;
+
+    if(media?.imageUrl&&looksLikeRealMedia(media)){
+      const confidence=String(media.confidence||"LOW").toUpperCase();
+      const match=String(media.mediaMatch||"");
+      const score=
+        (confidence==="HIGH"?100:confidence==="MEDIUM"?70:40)+
+        (/EXACT/i.test(match)?30:/REPRESENTATIVE|DESCENDANT/i.test(match)?10:0);
+
+      mediaIndexUpsert.run(
+        String(row.id),
+        row.scientific_name,
+        cleanAuditQuery(row).toLowerCase(),
+        media.source||null,
+        media.providerTaxonId||media.inaturalistTaxonId||media.occurrenceKey||null,
+        media.imageUrl,
+        media.imageUrl,
+        media.originalUrl||knowledge?.wikipedia?.pageUrl||null,
+        "image",
+        match||null,
+        score,
+        media.resolver||null,
+        media.confidence||null,
+        media.creator||null,
+        media.license||null,
+        Date.now()
+      );
+    }
 
     upsert.run(
       String(row.id),
@@ -495,7 +625,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
   }
 
   if(offset+auditBatchSize<rows.length){
-    await new Promise((resolve)=>setTimeout(resolve,1200));
+    await new Promise((resolve)=>setTimeout(resolve,350));
   }
 }
 
