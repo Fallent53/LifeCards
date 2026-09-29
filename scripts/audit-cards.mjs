@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v5-wikipedia-batched";
+const AUDIT_RESOLVER_VERSION="v6-clean-names-exact-wikipedia";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -208,6 +208,7 @@ const rows=taxonomy.prepare(`
     t.scientific_name,
     t.canonical_name,
     t.common_name,
+    t.authorship,
     t.rank,
     t.status AS taxonomic_status
   FROM drop_pool p
@@ -293,6 +294,28 @@ function classify(row,knowledge){
   };
 }
 
+function cleanAuditQuery(row){
+  const rank=String(row.rank||"").toLowerCase().trim();
+  let value=String(row.canonical_name||row.scientific_name||"").trim();
+  const authorship=String(row.authorship||"").trim();
+
+  if(authorship&&value.toLowerCase().endsWith(authorship.toLowerCase())){
+    value=value.slice(0,value.length-authorship.length).trim();
+  }
+
+  const authorish=/\b\d{4}\b|\bemend\.?\b|\bsensu\b|\bex\b|\bet al\.?\b|\bCavalier-Smith\b/i;
+  if(authorish.test(value)){
+    if(["species","subspecies","variety","subvariety","form","subform"].includes(rank)){
+      const match=value.match(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+\s+[a-z][\p{L}.-]+(?:\s+[a-z][\p{L}.-]+)?)/u);
+      if(match)value=match[1];
+    }else{
+      value=value.split(/\s+/)[0];
+    }
+  }
+
+  return value||String(row.scientific_name||"").trim();
+}
+
 let processed=0;
 const runStarted=Date.now();
 const auditBatchSize=Math.max(10,Math.min(50,Number(args.get("batch-size")||40)));
@@ -301,7 +324,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
   const chunk=rows.slice(offset,offset+auditBatchSize);
   const entries=chunk.map((row)=>({
     id:String(row.id),
-    query:String(row.canonical_name||row.scientific_name||"").trim(),
+    query:cleanAuditQuery(row),
   }));
 
   let resolved={};
@@ -339,7 +362,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
 
     processed+=1;
     console.log(
-      `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${row.canonical_name||row.scientific_name} · ${media?.resolver||"no-media"}`
+      `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${cleanAuditQuery(row)} · ${media?.resolver||"no-media"} · ${classification.reason}`
     );
   }
 
