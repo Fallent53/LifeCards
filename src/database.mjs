@@ -420,29 +420,119 @@ export function ownedScientificNames(userId = "explorer", scientificNames = []) 
   return [...owned];
 }
 
+function hydrateMarketRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    price: Number(row.price),
+    sellerId: row.seller_id,
+    createdAt: Number(row.created_at),
+    card: hydrateCard({
+      id: row.card_id,
+      owner_id: row.seller_id,
+      definition_id: row.definition_id,
+      edition_key: row.edition_key,
+      serial_number: row.serial_number,
+      serial_cap: row.serial_cap,
+      finish: row.finish,
+      rarity: row.rarity,
+      kind: row.kind,
+      definition_json: row.definition_json,
+      common_name: row.common_name,
+      scientific_name: row.scientific_name,
+      created_at: row.card_created_at ?? row.created_at,
+    }),
+  };
+}
+
+const MARKET_SELECT = `
+  SELECT
+    l.id,l.card_id,l.seller_id,l.price,l.created_at,
+    c.definition_id,c.edition_key,c.serial_number,c.serial_cap,
+    c.finish,c.rarity,c.kind,c.definition_json,c.common_name,c.scientific_name,
+    c.created_at AS card_created_at
+  FROM listings l
+  JOIN cards c ON c.id = l.card_id
+`;
+
+export function getListing(listingId) {
+  migrate();
+  const row = db.prepare(
+    MARKET_SELECT + " WHERE l.id = ? AND l.status = 'ACTIVE' LIMIT 1"
+  ).get(String(listingId));
+  return hydrateMarketRow(row);
+}
+
 export function listMarket() {
   migrate();
-  return db.prepare(`SELECT l.*, c.definition_id, c.edition_key, c.serial_number, c.serial_cap, c.finish, c.rarity, c.kind, c.definition_json
-    FROM listings l JOIN cards c ON c.id = l.card_id
-    WHERE l.status = 'ACTIVE' ORDER BY l.created_at DESC`).all().map((row) => ({
-      id: row.id,
-      price: Number(row.price),
-      sellerId: row.seller_id,
-      createdAt: Number(row.created_at),
-      card: hydrateCard({
-        id: row.card_id,
-        owner_id: row.seller_id,
-        definition_id: row.definition_id,
-        edition_key: row.edition_key,
-        serial_number: row.serial_number,
-        serial_cap: row.serial_cap,
-        finish: row.finish,
-        rarity: row.rarity,
-        kind: row.kind,
-        definition_json: row.definition_json,
-        created_at: row.created_at,
-      }),
-    }));
+  return db.prepare(
+    MARKET_SELECT + " WHERE l.status = 'ACTIVE' ORDER BY l.created_at DESC"
+  ).all().map(hydrateMarketRow);
+}
+
+export function listMarketPage({
+  filter = "ALL",
+  query = "",
+  sort = "NEWEST",
+  limit = 24,
+  offset = 0,
+} = {}) {
+  migrate();
+
+  const safeLimit = Math.max(1, Math.min(60, Number(limit) || 24));
+  const safeOffset = Math.max(0, Number(offset) || 0);
+  const clauses = ["l.status = 'ACTIVE'"];
+  const params = [];
+
+  const normalizedFilter = String(filter || "ALL").toUpperCase();
+  if (normalizedFilter === "HOLO") clauses.push("c.finish = 'HOLO'");
+  if (normalizedFilter === "WILD") clauses.push("c.edition_key = 'WILD CENSUS I'");
+  if (normalizedFilter === "FOSSIL") clauses.push("c.edition_key LIKE 'FOSSIL%'");
+  if (normalizedFilter === "TAXA") clauses.push("c.kind = 'taxon'");
+
+  const q = String(query || "").trim();
+  if (q) {
+    const like = "%" + q + "%";
+    clauses.push(
+      "(c.common_name LIKE ? COLLATE NOCASE OR c.scientific_name LIKE ? COLLATE NOCASE OR c.rarity LIKE ? COLLATE NOCASE)"
+    );
+    params.push(like, like, like);
+  }
+
+  const where = clauses.join(" AND ");
+  const normalizedSort = String(sort || "NEWEST").toUpperCase();
+  const order =
+    normalizedSort === "PRICE_ASC"
+      ? "l.price ASC, l.created_at DESC"
+      : normalizedSort === "PRICE_DESC"
+        ? "l.price DESC, l.created_at DESC"
+        : "l.created_at DESC";
+
+  const total = Number(
+    db.prepare(
+      "SELECT COUNT(*) AS c FROM listings l JOIN cards c ON c.id = l.card_id WHERE " + where
+    ).get(...params)?.c || 0
+  );
+
+  const activeTotal = Number(
+    db.prepare("SELECT COUNT(*) AS c FROM listings WHERE status = 'ACTIVE'").get()?.c || 0
+  );
+
+  const rows = db.prepare(
+    MARKET_SELECT +
+    " WHERE " + where +
+    " ORDER BY " + order +
+    " LIMIT ? OFFSET ?"
+  ).all(...params, safeLimit, safeOffset);
+
+  return {
+    items: rows.map(hydrateMarketRow),
+    total,
+    activeTotal,
+    limit: safeLimit,
+    offset: safeOffset,
+    hasMore: safeOffset + rows.length < total,
+  };
 }
 
 export function createListing(userId, cardId, price) {
@@ -453,7 +543,7 @@ export function createListing(userId, cardId, price) {
   const id = uuid();
   db.prepare("INSERT INTO listings (id, card_id, seller_id, price, status, created_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?)")
     .run(id, cardId, userId, price, nowMs());
-  return listMarket().find((listing) => listing.id === id);
+  return getListing(id);
 }
 
 export function buyListing(userId, listingId) {
@@ -482,7 +572,21 @@ export function buyListing(userId, listingId) {
 
 export function listSupplies() {
   migrate();
-  const rows = db.prepare("SELECT definition_id, edition_key, issued_count FROM supplies ORDER BY definition_id, edition_key").all();
+  const rows = db.prepare(
+    "SELECT definition_id, edition_key, issued_count FROM supplies ORDER BY definition_id, edition_key"
+  ).all();
+  return rows.map((row) => ({
+    definitionId: row.definition_id,
+    edition: row.edition_key,
+    issued: Number(row.issued_count),
+  }));
+}
+
+export function getDefinitionSupplies(definitionId) {
+  migrate();
+  const rows = db.prepare(
+    "SELECT definition_id, edition_key, issued_count FROM supplies WHERE definition_id = ? ORDER BY edition_key"
+  ).all(String(definitionId));
   return rows.map((row) => ({
     definitionId: row.definition_id,
     edition: row.edition_key,
@@ -511,9 +615,7 @@ export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
     user: { id: user.id, displayName: user.display_name, coins: Number(user.coins), packs: Number(user.pack_balance), maxPacks: config.maxStoredPacks, nextPackInMs },
     inventory,
     collectionSummary: getCollectionSummary(userId),
-    market: listMarket(),
     catalog: publicCatalog(),
-    supplies: listSupplies(),
     origin: getOriginStatus(),
     config: { packIntervalMs: config.packIntervalMs, cardsPerPack: config.cardsPerPack, maxStoredPacks: config.maxStoredPacks, holoRate: config.holoRate, lucaRarityLabel: "UNKNOWN" },
   };
