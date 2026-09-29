@@ -7,7 +7,7 @@ import { searchCommonsImage } from "./src/media.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
-const port = Number(process.env.PORT ?? 3000);
+const preferredPort = Number(process.env.PORT ?? 3000);\nconst hasExplicitPort = process.env.PORT != null;
 
 const mime = {
   ".html": "text/html; charset=utf-8",
@@ -92,10 +92,33 @@ async function serveStatic(response, pathname) {
   }
 }
 
-http.createServer(async (request, response) => {
+async function handleRequest(request, response) {
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   if (url.pathname.startsWith("/api/")) return api(request, response, url);
   return serveStatic(response, url.pathname);
-}).listen(port, () => {
-  console.log(`LifeCards running on http://localhost:${port}`);
-});
+}
+
+function startServer(port, attemptsLeft = 10) {
+  const server = http.createServer(handleRequest);
+
+  server.once("error", (error) => {
+    if (error.code === "EADDRINUSE" && !hasExplicitPort && attemptsLeft > 0) {
+      const nextPort = port + 1;
+      console.warn(`Port ${port} is already in use. Trying ${nextPort}...`);
+      return startServer(nextPort, attemptsLeft - 1);
+    }
+
+    if (error.code === "EADDRINUSE") {
+      console.error(`Port ${port} is already in use. Set PORT to another value, for example PORT=3001.`);
+    } else {
+      console.error(error);
+    }
+    process.exitCode = 1;
+  });
+
+  server.listen(port, () => {
+    console.log(`LifeCards running on http://localhost:${port}`);
+  });
+}
+
+startServer(preferredPort);
