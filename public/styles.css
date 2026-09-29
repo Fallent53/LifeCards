@@ -55,3 +55,13 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 
 .origin-tease.discovered{border-color:#805eb6;background:radial-gradient(circle at 90% 0,#4a326d,transparent 52%),#120e1a}
 .origin-tease.discovered .origin-orbit{border-color:#be9cff;box-shadow:0 0 24px #9e73ff33}
+
+.tree-search-wrap{position:relative;max-width:720px;margin:22px 0}
+.tree-search-results{position:absolute;z-index:10;left:0;right:0;top:50px;display:grid;gap:4px;padding:7px;border:1px solid var(--line);border-radius:13px;background:#08140ff2;box-shadow:var(--shadow);backdrop-filter:blur(16px)}
+.tree-search-results>button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 11px;border:0;border-radius:9px;background:transparent;color:var(--ink);text-align:left}
+.tree-search-results>button:hover{background:#13271d}
+.tree-search-results>button>span{width:28px;text-align:center;font-size:18px}
+.tree-search-results b{display:block;font-size:10px}
+.tree-search-results small{display:block;color:var(--muted);font-size:8px;margin-top:2px}
+.tree-search-results>span{padding:10px;color:var(--muted);font-size:9px}
+.result-count{color:var(--muted);font-size:9px;white-space:nowrap}
