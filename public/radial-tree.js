@@ -507,6 +507,30 @@ export class RadialTreeMap {
     });
   }
 
+  revealTarget(id) {
+    const key=String(id||"");
+    if(!key)return;
+    const selector='[data-radial-id="'+CSS.escape(key)+'"]';
+    const element=this.container.querySelector(selector);
+    const entry=this.model?.byId?.get(key);
+    if(!element||!entry)return;
+
+    element.classList.add("atlas-target");
+    this.setInspector(entry.node);
+    this.highlightLineage(entry);
+
+    const point=polar(entry.angle,entry.depth*Math.max(105,Math.min(178,660/Math.max(1,...this.model.nodes.map(item=>item.depth)))));
+    this.scale=Math.max(this.scale,1.25);
+    this.x=-point.x*this.scale*.42;
+    this.y=-point.y*this.scale*.42;
+    this.applyTransform();
+
+    setTimeout(()=>{
+      element.classList.remove("atlas-target");
+      this.clearHighlight();
+    },2600);
+  }
+
   moveTooltip(event) {
     if (!this.tooltip) return;
     const rect = this.container.getBoundingClientRect();
