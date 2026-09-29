@@ -12,7 +12,7 @@ const mapTaxonomyPath = resolve(
 const cardQualityPath = resolve(
   process.env.LIFECARDS_CARD_QUALITY_DB ?? "./data/card-quality.sqlite"
 );
-const CURRENT_MEDIA_RESOLVER = "v15-exact-natural-media";
+const CURRENT_MEDIA_RESOLVER = "v16-inat-exact-taxon-id";
 
 const openDatabases = new Map();
 
