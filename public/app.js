@@ -902,8 +902,12 @@ function renderMarket(){
         (ui.marketLoading&&!listings.length
           ?Array.from({length:8},()=>'<div class="market-card-skeleton"></div>').join("")
           :(listings.length?listings.map(listing=>
-            '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
-            '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
+            '<article class="market-item '+(listing.sellerId===ui.state.user.id?"own-listing":"")+'">'+cardHtml(listing.card,{compact:true})+
+            '<div class="market-meta"><div><small>'+(listing.sellerId===ui.state.user.id?"YOUR ASK":"ASK")+'</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div>'+
+            (listing.sellerId===ui.state.user.id
+              ?'<button class="cancel-listing" data-cancel-listing="'+esc(listing.id)+'">Cancel</button>'
+              :'<button data-buy="'+esc(listing.id)+'">Buy</button>')+
+            '</div></article>'
           ).join(""):'<div class="empty-state">No listings match this search.</div>'))+
       '</div>'+
       '<div class="collection-pagination market-pagination">'+
@@ -916,6 +920,10 @@ function renderMarket(){
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{
     event.stopPropagation();
     buy(button.dataset.buy);
+  });
+  document.querySelectorAll("[data-cancel-listing]").forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    cancelMarketListing(button.dataset.cancelListing);
   });
 
   document.querySelectorAll("[data-market-filter]").forEach(button=>button.onclick=()=>{
@@ -1711,6 +1719,15 @@ async function buy(listingId){
     flash("Card acquired");
     await refresh();
     if(ui.view==="market")loadMarketData();
+  }catch(error){flash(error.message)}
+}
+
+async function cancelMarketListing(listingId){
+  try{
+    await api("/api/market/cancel",{method:"POST",body:JSON.stringify({listingId})});
+    ui.marketData=null;
+    flash("Listing cancelled");
+    if(ui.view==="market")await loadMarketData();
   }catch(error){flash(error.message)}
 }
 
