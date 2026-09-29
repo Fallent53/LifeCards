@@ -396,6 +396,30 @@ export function listDefinitionCopies(userId = "explorer", definitionId, limit = 
   ).all(userId, String(definitionId), safeLimit).map(hydrateCard);
 }
 
+export function ownedScientificNames(userId = "explorer", scientificNames = []) {
+  migrate(); ensureUser(userId);
+  const names = [...new Set(
+    scientificNames
+      .map((name) => String(name || "").trim())
+      .filter(Boolean)
+  )].slice(0, 1200);
+
+  const owned = new Set();
+  const chunkSize = 180;
+  for (let offset = 0; offset < names.length; offset += chunkSize) {
+    const chunk = names.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db.prepare(
+      "SELECT DISTINCT scientific_name FROM cards " +
+      "WHERE owner_id = ? AND scientific_name IN (" + placeholders + ")"
+    ).all(userId, ...chunk);
+    for (const row of rows) {
+      if (row.scientific_name) owned.add(String(row.scientific_name));
+    }
+  }
+  return [...owned];
+}
+
 export function listMarket() {
   migrate();
   return db.prepare(`SELECT l.*, c.definition_id, c.edition_key, c.serial_number, c.serial_cap, c.finish, c.rarity, c.kind, c.definition_json
