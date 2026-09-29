@@ -8,6 +8,13 @@ function cleanHtml(value = "") {
 function acceptedLicense(metadata = {}) {
   const raw = [metadata.LicenseShortName?.value, metadata.License?.value, metadata.UsageTerms?.value]
     .filter(Boolean).join(" ").toLowerCase();
+
+  const disallowed = [
+    "cc by-nc", "cc-by-nc", "noncommercial", "non-commercial",
+    "cc by-nd", "cc-by-nd", "no derivatives", "noderivatives",
+  ];
+  if (disallowed.some((marker) => raw.includes(marker))) return false;
+
   return ACCEPTED_LICENSE_MARKERS.some((marker) => raw.includes(marker));
 }
 
