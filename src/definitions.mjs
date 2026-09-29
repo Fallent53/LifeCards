@@ -1,5 +1,5 @@
 import { byId, catalog } from "./catalog.mjs";
-import { getTaxon, pickDropTaxon } from "./taxonomy-store.mjs";
+import { getTaxon, pickDropTaxon, taxonomyStatus } from "./taxonomy-store.mjs";
 
 const curatedByScientificName = new Map(
   catalog
@@ -54,6 +54,7 @@ export function definitionFromTaxon(taxon) {
   const scientificName = taxon.scientificName || taxon.canonicalName || "Unknown taxon";
   const commonName = curated?.commonName || taxon.commonName || taxon.canonicalName || scientificName;
   const rarity = curated?.rarity || taxon.gameRarity || rarityForRank(taxon.rank);
+  const taxonomy = taxonomyStatus();
 
   return {
     ...(curated || {}),
@@ -78,6 +79,8 @@ export function definitionFromTaxon(taxon) {
         : `Catalogue of Life ${taxon.rank || "taxon"} node.`
     ),
     source: taxon.source || "Catalogue of Life",
+    taxonomyRelease: taxonomy.release || taxonomy.datasetKey || taxonomy.mode,
+    taxonomyImportedAt: taxonomy.importedAt || null,
   };
 }
 
