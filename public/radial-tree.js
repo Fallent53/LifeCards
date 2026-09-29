@@ -168,13 +168,11 @@ export class RadialTreeMap {
         const id = element.dataset.radialId;
         const node = byId.get(String(id)) || (String(this.payload.root.id) === String(id) ? this.payload.root : null);
         if (!node) return;
-        this.options.onSelect?.(node);
-      });
-      element.addEventListener("dblclick", (event) => {
-        event.stopPropagation();
-        const id = element.dataset.radialId;
-        const node = byId.get(String(id));
-        if (node && Number(node.childCount || 0) > 0) this.options.onFocus?.(node);
+        if (Number(node.childCount || 0) > 0 && String(node.id) !== String(this.payload.root.id)) {
+          this.options.onFocus?.(node);
+        } else {
+          this.options.onSelect?.(node);
+        }
       });
       element.addEventListener("pointerenter", (event) => {
         const id = element.dataset.radialId;
