@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames } from "./src/database.mjs";
+import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -144,6 +144,14 @@ async function api(request, response, url) {
       const result = claimPack(uid);
       return json(response, 200, result);
     }
+    if (request.method === "GET" && url.pathname === "/api/market") {
+      const filter = url.searchParams.get("filter") || "ALL";
+      const query = url.searchParams.get("q") || "";
+      const sort = url.searchParams.get("sort") || "NEWEST";
+      const limit = Number(url.searchParams.get("limit") || 24);
+      const offset = Number(url.searchParams.get("offset") || 0);
+      return json(response, 200, listMarketPage({ filter, query, sort, limit, offset }));
+    }
     if (request.method === "POST" && url.pathname === "/api/market/list") {
       const input = await bodyJson(request);
       const listing = createListing(uid, String(input.cardId || ""), Number(input.price));
@@ -153,6 +161,13 @@ async function api(request, response, url) {
       const input = await bodyJson(request);
       const result = buyListing(uid, String(input.listingId || ""));
       return json(response, 200, result);
+    }
+    if (request.method === "GET" && url.pathname === "/api/supplies") {
+      const definitionId = url.searchParams.get("definitionId") || "";
+      return json(response, 200, {
+        definitionId,
+        items: getDefinitionSupplies(definitionId),
+      });
     }
     if (request.method === "GET" && url.pathname === "/api/media") {
       const query = url.searchParams.get("q") || "";
