@@ -107,7 +107,7 @@ function cardQualityStatus() {
   const expectedScope = gameplayDb ? String(metaValue(gameplayDb, "scope") || "") : "";
   const auditedScope = String(metaValue(db, "taxonomy_scope") || "");
   const resolverVersion = String(metaValue(db, "resolver_version") || "");
-  const expectedResolver = "v12-strict-real-media";
+  const expectedResolver = "v13-all-real-media-fallbacks";
   const compatible =
     Boolean(expectedScope) &&
     auditedScope.toLowerCase() === expectedScope.toLowerCase() &&
