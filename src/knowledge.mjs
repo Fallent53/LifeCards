@@ -390,7 +390,16 @@ async function wikipediaPagesBatch(entries,{lang="en"}={}){
         title=aliases.get(lowerKey(title));
       }
       const page=pageByTitle.get(lowerKey(title))||pageByTitle.get(lowerKey(original))||null;
-      if(page)output.set(lowerKey(original),page);
+      if(page){
+        output.set(lowerKey(original),{
+          ...page,
+          _lifecardsMatch:
+            lowerKey(page.title)===lowerKey(original)
+              ?"exact-title"
+              :(lowerKey(title)!==lowerKey(original)?"redirect":"resolved"),
+          _lifecardsRequestedTitle:original,
+        });
+      }
     }
   }
 
@@ -458,6 +467,8 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
       claimValue(entity,"P225") &&
       lowerKey(claimValue(entity,"P225"))===lowerKey(entry.query)
     );
+    const exactWikipediaTitle=page?._lifecardsMatch==="exact-title";
+    const trustedIdentity=exactTaxonIdentity||exactWikipediaTitle;
 
     let media=null;
     if(page?.pageimage){
@@ -467,8 +478,10 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
         media={
           ...media,
           resolver:"wikipedia-pageimage-batch",
-          confidence:exactTaxonIdentity?"HIGH":"MEDIUM",
+          confidence:trustedIdentity?"HIGH":"MEDIUM",
           exactTaxonIdentity,
+          exactWikipediaTitle,
+          wikipediaMatch:page?._lifecardsMatch||null,
         };
       }
     }
