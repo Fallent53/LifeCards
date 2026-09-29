@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchCommonsImageFast, searchINaturalistPhotoFast, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v14-aggressive-media";
@@ -501,8 +501,201 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
 }
 
 
+export async function getFastMediaBatch(entries,{lang="en"}={}) {
+  const normalized=[];
+  const seen=new Set();
+
+  for(const entry of Array.isArray(entries)?entries:[]){
+    const id=String(entry?.id??"").trim();
+    const query=String(entry?.query??"").trim();
+    if(!id||!query||seen.has(id))continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      query,
+      fallbackQueries:[...new Set(
+        (Array.isArray(entry?.fallbackQueries)?entry.fallbackQueries:[])
+          .map((value)=>String(value||"").trim())
+          .filter(Boolean)
+      )].slice(0,2),
+    });
+    if(normalized.length>=24)break;
+  }
+
+  const output={};
+  const unresolved=[];
+
+  for(const item of normalized){
+    const persistedQuery=`${CACHE_SCHEMA_VERSION}:${item.query.toLowerCase()}`;
+    const cacheKey=`${lang}:${persistedQuery}`;
+    const memory=cache.get(cacheKey)?.value||null;
+    const persisted=memory||readPersistentCache(persistedQuery,lang);
+
+    if(persisted?.media?.imageUrl){
+      output[item.id]=persisted;
+      if(!memory)cache.set(cacheKey,{storedAt:Date.now(),value:persisted});
+    }else{
+      unresolved.push(item);
+    }
+  }
+
+  if(!unresolved.length)return output;
+
+  // One batched request per language, no Wikidata/file-metadata roundtrips.
+  const languageResults=await Promise.allSettled(
+    [lang,"fr"].filter((value,index,array)=>array.indexOf(value)===index)
+      .map(async language=>({language,batch:await wikipediaPagesBatchFast(unresolved,{lang:language})}))
+  );
+
+  const stillMissing=[];
+  for(const item of unresolved){
+    let resolved=null;
+
+    for(const result of languageResults){
+      if(result.status!=="fulfilled")continue;
+      const page=result.value.batch.pages.get(lowerKey(item.query))||null;
+      if(!page)continue;
+      const media=wikipediaThumbnailFallback(page,result.value.language);
+      if(!media?.imageUrl)continue;
+
+      resolved={
+        query:item.query,
+        wikipedia:{
+          title:page.title,
+          extract:"",
+          description:null,
+          pageUrl:page.fullurl||null,
+          thumbnailUrl:page.thumbnail?.source||page.original?.source||null,
+          pageImage:page.pageimage||null,
+          language:result.value.language,
+        },
+        media:{
+          ...media,
+          resolver:"wikipedia-pageimage-fast",
+          confidence:"MEDIUM",
+          mediaMatch:"FAST_PAGEIMAGE",
+        },
+        sources:[`Wikipedia (${result.value.language})`],
+        sourceStatus:{wikipedia:"ok",media:"ok"},
+        resolvedAt:new Date().toISOString(),
+      };
+      break;
+    }
+
+    if(resolved){
+      output[item.id]=resolved;
+      cacheMergedKnowledge(item.query,lang,resolved);
+    }else{
+      stillMissing.push(item);
+    }
+  }
+
+  let cursor=0;
+  const workerCount=Math.min(6,stillMissing.length);
+
+  async function worker(){
+    while(cursor<stillMissing.length){
+      const item=stillMissing[cursor++];
+      const queries=[item.query,...item.fallbackQueries].filter(Boolean).slice(0,2);
+      let media=null;
+      let usedQuery=item.query;
+
+      for(const candidate of queries){
+        const [inat,commons]=await Promise.all([
+          searchINaturalistPhotoFast(candidate),
+          searchCommonsImageFast(candidate),
+        ]);
+        media=inat||commons||null;
+        if(media){
+          usedQuery=candidate;
+          break;
+        }
+      }
+
+      if(!media?.imageUrl)continue;
+
+      const representative=lowerKey(usedQuery)!==lowerKey(item.query);
+      const value={
+        query:item.query,
+        media:{
+          ...media,
+          resolver:representative
+            ?"fast-representative-descendant"
+            :(media.source?.includes("iNaturalist")?"inaturalist-fast":"commons-fast"),
+          confidence:"LOW",
+          mediaMatch:representative
+            ?"REPRESENTATIVE_DESCENDANT_FAST"
+            :(media.mediaMatch||"FAST_QUERY"),
+          representativeTaxon:representative?usedQuery:null,
+          representativeFor:representative?item.query:null,
+        },
+        sources:[media.source||"External media"],
+        sourceStatus:{media:representative?"representative-descendant":"ok"},
+        resolvedAt:new Date().toISOString(),
+      };
+      output[item.id]=value;
+      cacheMergedKnowledge(item.query,lang,value);
+    }
+  }
+
+  await Promise.all(Array.from({length:workerCount},()=>worker()));
+  return output;
+}
+
 function lowerKey(value=""){
   return String(value||"").trim().toLowerCase();
+}
+
+async function wikipediaPagesBatchFast(entries,{lang="en"}={}){
+  const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
+  const queries=[...new Set(entries.map((entry)=>String(entry.query||"").trim()).filter(Boolean))];
+  const output=new Map();
+
+  for(let offset=0;offset<queries.length;offset+=40){
+    const chunk=queries.slice(offset,offset+40);
+    const params=new URLSearchParams({
+      action:"query",
+      format:"json",
+      origin:"*",
+      redirects:"1",
+      prop:"pageimages|info",
+      titles:chunk.join("|"),
+      piprop:"thumbnail|name|original",
+      pithumbsize:"1000",
+      inprop:"url",
+    });
+
+    let json=null;
+    try{
+      json=await fetchJson(
+        `https://${safeLang}.wikipedia.org/w/api.php?${params}`,
+        3000,
+        {retries:0}
+      );
+    }catch{
+      continue;
+    }
+
+    const aliases=new Map();
+    for(const item of json?.query?.normalized??[])aliases.set(lowerKey(item.from),item.to);
+    for(const item of json?.query?.redirects??[])aliases.set(lowerKey(item.from),item.to);
+
+    const pages=Object.values(json?.query?.pages??{}).filter((page)=>page&&!page.missing);
+    const pageByTitle=new Map(pages.map((page)=>[lowerKey(page.title),page]));
+
+    for(const original of chunk){
+      let title=original;
+      const visited=new Set();
+      while(aliases.has(lowerKey(title))&&!visited.has(lowerKey(title))){
+        visited.add(lowerKey(title));
+        title=aliases.get(lowerKey(title));
+      }
+      const page=pageByTitle.get(lowerKey(title))||pageByTitle.get(lowerKey(original))||null;
+      if(page)output.set(lowerKey(original),page);
+    }
+  }
+
+  return {pages:output};
 }
 
 async function wikipediaPagesBatch(entries,{lang="en"}={}){
