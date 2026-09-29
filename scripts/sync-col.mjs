@@ -241,6 +241,16 @@ db.exec(`
   CREATE INDEX taxa_canonical_idx ON taxa(canonical_name COLLATE NOCASE);
   CREATE INDEX taxa_common_idx ON taxa(common_name COLLATE NOCASE);
   CREATE INDEX taxa_rank_idx ON taxa(rank);
+  CREATE VIRTUAL TABLE taxa_fts USING fts5(
+    id UNINDEXED,
+    scientific_name,
+    canonical_name,
+    common_name,
+    tokenize = 'unicode61 remove_diacritics 2'
+  );
+  INSERT INTO taxa_fts(id, scientific_name, canonical_name, common_name)
+    SELECT id, scientific_name, COALESCE(canonical_name,''), COALESCE(common_name,'')
+    FROM taxa;
   CREATE TEMP TABLE child_counts AS
     SELECT parent_id AS id, COUNT(*) AS c
     FROM taxa
