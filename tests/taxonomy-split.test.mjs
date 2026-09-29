@@ -111,10 +111,13 @@ qualityDb.exec(`
   INSERT INTO meta(key,value) VALUES ('resolver_version','v3-canonical-authorship-wikipedia');
   CREATE TABLE card_quality(
     taxon_id TEXT PRIMARY KEY,
-    status TEXT NOT NULL
+    status TEXT NOT NULL,
+    resolver_version TEXT
   );
-  INSERT INTO card_quality(taxon_id,status) VALUES ('game-species','READY');
-  INSERT INTO card_quality(taxon_id,status) VALUES ('game-unready','REVIEW');
+  INSERT INTO card_quality(taxon_id,status,resolver_version)
+    VALUES ('game-species','READY','v3-canonical-authorship-wikipedia');
+  INSERT INTO card_quality(taxon_id,status,resolver_version)
+    VALUES ('game-unready','REVIEW','v3-canonical-authorship-wikipedia');
   CREATE TABLE ready_drop_pool(
     rarity TEXT NOT NULL,
     slot INTEGER NOT NULL,
