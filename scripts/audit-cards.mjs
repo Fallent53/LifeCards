@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v9-best-attributed-media";
+const AUDIT_RESOLVER_VERSION="v10-gameplay-medium-ok";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -315,8 +315,13 @@ function classify(row,knowledge){
   }
 
   const confidence=String(media.confidence||"LOW").toUpperCase();
-  if(confidence==="HIGH"){
-    return {status:"READY",reason:"high-confidence taxon-linked licensed image"};
+  if(confidence==="HIGH"||confidence==="MEDIUM"){
+    return {
+      status:"READY",
+      reason:confidence==="HIGH"
+        ?"high-confidence taxon-linked licensed image"
+        :"licensed attributed image accepted for gameplay (medium confidence)"
+    };
   }
 
   return {
