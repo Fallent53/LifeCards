@@ -86,11 +86,18 @@ npm start
 
 The Tree of Life and Codex automatically prefer the local CoL database when present; otherwise they use ChecklistBank live, and only fall back to the tiny seed catalog if the external service is unavailable. The UI never tries to render millions of nodes simultaneously: it loads a bounded radial subtree around the branch being explored.
 
-To import the entire Catalogue of Life instead of only Animalia:
+To make the **Tree of Life** use the complete catalogue while keeping gameplay drops centered on Animalia:
 
 ```bash
-npm run sync:col:all
+npm run sync:map
 ```
+
+This reuses the same cached Catalogue of Life DwCA archive, writes a separate `data/life.sqlite`, and skips drop-pool generation. LifeCards then uses:
+
+- `data/animalia.sqlite` for pack/drop selection;
+- `data/life.sqlite` for Tree of Life search and cartography.
+
+If `life.sqlite` is absent, the map transparently falls back to `animalia.sqlite`. This separation prevents a full-life scientific map from flooding normal packs with every microbial species in the catalogue.
 
 You can pin a different ChecklistBank release with `COL_DATASET_KEY` or `--dataset`. The default dataset key is documented in `scripts/sync-col.mjs` and should be updated deliberately when moving to a new scientific snapshot.
 
@@ -191,3 +198,10 @@ External enrichment is deliberately lazy:
 - public taxonomy/knowledge API responses use browser/CDN cache headers
 
 This is intentional: prefetching media for millions of species would be slow, wasteful and unfriendly to upstream public APIs.
+
+
+### Separate gameplay and map taxonomies
+
+`LIFECARDS_TAXONOMY_DB` controls the taxonomy used by collectible drop pools. The default is `data/animalia.sqlite`.
+
+`LIFECARDS_MAP_TAXONOMY_DB` controls the optional larger taxonomy used by Tree of Life navigation. The default is `data/life.sqlite`. If that file does not exist or is on an old schema, LifeCards automatically uses the gameplay taxonomy instead.
