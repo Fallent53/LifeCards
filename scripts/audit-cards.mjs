@@ -299,6 +299,19 @@ const upsert=quality.prepare(`
     checked_at=excluded.checked_at
 `);
 
+function looksLikeRealMedia(media){
+  if(!media?.imageUrl)return false;
+  const haystack=[
+    media.title,
+    media.originalUrl,
+    media.imageUrl,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if(/\.svg(?:\?|$)/i.test(String(media.imageUrl||"")))return false;
+  if(/\b(icon|logo|diagram|drawing|illustration|cladogram|phylogeny|silhouette|symbol|emoji|reconstruction)\b/i.test(haystack))return false;
+  return true;
+}
+
 function classify(row,knowledge){
   if(knowledge?.auditTransientError){
     return {status:"ERROR",reason:knowledge.auditTransientError};
@@ -313,6 +326,10 @@ function classify(row,knowledge){
   const media=knowledge?.media||null;
   if(!media?.imageUrl){
     return {status:"NO_IMAGE",reason:"no reusable licensed image resolved"};
+  }
+
+  if(!looksLikeRealMedia(media)){
+    return {status:"REVIEW",reason:"non-photographic media rejected for gameplay"};
   }
 
   const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
