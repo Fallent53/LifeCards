@@ -817,3 +817,8 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   background:#173622;
   color:#e5ffed;
 }
+
+
+.taxonomy-status.ready:has(b:first-child){transition:border-color .18s ease}
+.tree-head-actions .taxonomy-status.ready{background:#0a1811}
+.tree-head-actions .taxonomy-status.ready i{box-shadow:0 0 10px rgba(86,231,151,.45)}
