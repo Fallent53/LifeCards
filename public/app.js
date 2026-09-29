@@ -18,6 +18,15 @@ const ui={
   collectionPageSize:30,
   collectionRequestToken:0,
   marketFilter:"ALL",
+  marketSort:"NEWEST",
+  marketQuery:"",
+  marketData:null,
+  marketLoading:false,
+  marketPage:0,
+  marketPageSize:24,
+  marketRequestToken:0,
+  supplyCache:new Map(),
+  supplyLoading:new Set(),
   query:"",
   codexQuery:"",
   codexResults:[],
@@ -92,7 +101,22 @@ function liveNextPackMs(){
 }
 
 function supplyFor(definitionId,edition){
-  return ui.state?.supplies?.find(s=>s.definitionId===definitionId&&s.edition===edition)||null;
+  return (ui.supplyCache.get(String(definitionId))||[])
+    .find(s=>s.definitionId===definitionId&&s.edition===edition)||null;
+}
+
+async function loadSupplies(definitionId){
+  const key=String(definitionId||"");
+  if(!key||ui.supplyCache.has(key)||ui.supplyLoading.has(key))return;
+  ui.supplyLoading.add(key);
+  try{
+    const result=await api("/api/supplies?definitionId="+encodeURIComponent(key));
+    ui.supplyCache.set(key,result.items||[]);
+  }catch{
+    ui.supplyCache.set(key,[]);
+  }finally{
+    ui.supplyLoading.delete(key);
+  }
 }
 
 function formatTimer(ms){
@@ -730,27 +754,126 @@ function renderCollectionStackDetail(group,copies){
   loadKnowledge(d).catch(()=>{});
 }
 
-function renderMarket(){
-  const allListings=ui.state.market;
-  const listings=allListings.filter(listing=>{
-    if(ui.marketFilter==="HOLO")return listing.card.finish==="HOLO";
-    if(ui.marketFilter==="WILD")return listing.card.edition==="WILD CENSUS I";
-    if(ui.marketFilter==="FOSSIL")return listing.card.edition==="FOSSIL RECORD I";
-    return true;
+function marketQueryString(){
+  const params=new URLSearchParams({
+    filter:ui.marketFilter,
+    q:ui.marketQuery.trim(),
+    sort:ui.marketSort,
+    limit:String(ui.marketPageSize),
+    offset:String(ui.marketPage*ui.marketPageSize),
   });
-  const marketFilters=["ALL","HOLO","WILD","FOSSIL"];
+  return params.toString();
+}
+
+async function loadMarketData({resetPage=false}={}){
+  if(resetPage)ui.marketPage=0;
+  const token=++ui.marketRequestToken;
+  ui.marketLoading=true;
+  renderMarket();
+
+  try{
+    const result=await api("/api/market?"+marketQueryString());
+    if(token!==ui.marketRequestToken)return;
+    ui.marketData=result;
+    ui.marketLoading=false;
+    renderMarket();
+    wireCommon();
+  }catch(error){
+    if(token!==ui.marketRequestToken)return;
+    ui.marketLoading=false;
+    flash(error.message);
+    renderMarket();
+    wireCommon();
+  }
+}
+
+function renderMarket(){
+  const data=ui.marketData;
+  const listings=data?.items||[];
+  const marketFilters=["ALL","HOLO","WILD","FOSSIL","TAXA"];
+  const total=data?.total||0;
+  const globalTotal=data?.activeTotal||total;
+  const start=total?ui.marketPage*ui.marketPageSize+1:0;
+  const end=Math.min(total,(ui.marketPage+1)*ui.marketPageSize);
+  const pages=Math.max(1,Math.ceil(total/ui.marketPageSize));
+
   main.innerHTML=
-    '<section class="market-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">SECONDARY MARKET</span><h1>Market</h1><p>Collect editions, serials and finishes. Transactions use Coins; a 5% fee leaves the economy on each sale.</p></div>'+
-      '<div class="market-toolbar"><span>'+listings.length+' / '+allListings.length+' active listings</span><div>'+marketFilters.map(filter=>'<button class="filter-chip '+(ui.marketFilter===filter?"active":"")+'" data-market-filter="'+filter+'">'+filter+'</button>').join("")+'</div></div>'+
-      '<div class="market-grid">'+(listings.length?listings.map(listing=>
-        '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
-        '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
-      ).join(""):'<div class="empty-state">No listings match this filter.</div>')+'</div>'+
+    '<section class="market-page scalable-market">'+
+      '<div class="market-hero">'+
+        '<div><span class="eyebrow">SECONDARY MARKET</span><h1>Exchange</h1><p>Collect editions, serials and finishes. Fixed-price trades use Coins; 5% leaves the economy on each completed sale.</p></div>'+
+        '<div class="market-stat"><b>'+formatNumber(globalTotal)+'</b><small>active listings</small></div>'+
+      '</div>'+
+      '<div class="market-search-row">'+
+        '<label class="search-box"><span>⌕</span><input id="marketSearch" placeholder="Search species or taxon…" value="'+esc(ui.marketQuery)+'"></label>'+
+        '<div class="market-sort">'+
+          '<button data-market-sort="NEWEST" class="'+(ui.marketSort==="NEWEST"?"active":"")+'">Newest</button>'+
+          '<button data-market-sort="PRICE_ASC" class="'+(ui.marketSort==="PRICE_ASC"?"active":"")+'">Price ↑</button>'+
+          '<button data-market-sort="PRICE_DESC" class="'+(ui.marketSort==="PRICE_DESC"?"active":"")+'">Price ↓</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="market-toolbar">'+
+        '<span>'+(ui.marketLoading?"Loading…":(start?start+"–"+end+" of "+formatNumber(total):"0 listings"))+'</span>'+
+        '<div>'+marketFilters.map(filter=>'<button class="filter-chip '+(ui.marketFilter===filter?"active":"")+'" data-market-filter="'+filter+'">'+filter+'</button>').join("")+'</div>'+
+      '</div>'+
+      '<div class="market-grid '+(ui.marketLoading?"is-loading":"")+'">'+
+        (ui.marketLoading&&!listings.length
+          ?Array.from({length:8},()=>'<div class="market-card-skeleton"></div>').join("")
+          :(listings.length?listings.map(listing=>
+            '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
+            '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
+          ).join(""):'<div class="empty-state">No listings match this search.</div>'))+
+      '</div>'+
+      '<div class="collection-pagination market-pagination">'+
+        '<button id="marketPrev" '+(ui.marketPage<=0?"disabled":"")+'>← Previous</button>'+
+        '<span>Page '+(ui.marketPage+1)+' / '+pages+'</span>'+
+        '<button id="marketNext" '+(!(data?.hasMore)?"disabled":"")+'>Next →</button>'+
+      '</div>'+
     '</section>';
-  document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{event.stopPropagation();buy(button.dataset.buy)});
-  document.querySelectorAll("[data-market-filter]").forEach(button=>button.onclick=()=>{ui.marketFilter=button.dataset.marketFilter;renderMarket();wireCommon()});
+
+  document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    buy(button.dataset.buy);
+  });
+
+  document.querySelectorAll("[data-market-filter]").forEach(button=>button.onclick=()=>{
+    ui.marketFilter=button.dataset.marketFilter;
+    ui.marketData=null;
+    loadMarketData({resetPage:true});
+  });
+
+  document.querySelectorAll("[data-market-sort]").forEach(button=>button.onclick=()=>{
+    ui.marketSort=button.dataset.marketSort;
+    ui.marketData=null;
+    loadMarketData({resetPage:true});
+  });
+
+  const search=document.getElementById("marketSearch");
+  search?.addEventListener("input",event=>{
+    ui.marketQuery=event.target.value;
+    clearTimeout(marketSearch._timer);
+    marketSearch._timer=setTimeout(()=>{
+      ui.marketData=null;
+      loadMarketData({resetPage:true});
+    },220);
+  });
+
+  document.getElementById("marketPrev")?.addEventListener("click",()=>{
+    if(ui.marketPage<=0)return;
+    ui.marketPage-=1;
+    loadMarketData();
+  });
+
+  document.getElementById("marketNext")?.addEventListener("click",()=>{
+    if(!data?.hasMore)return;
+    ui.marketPage+=1;
+    loadMarketData();
+  });
+
   wireMediaObservers();
+
+  if(!data&&!ui.marketLoading){
+    queueMicrotask(()=>loadMarketData({resetPage:true}));
+  }
 }
 
 function collectTreeScientificNames(root){
@@ -1226,7 +1349,7 @@ function finishReveal(){
 }
 
 function openOwnedCard(id){
-  const card=ui.cardIndex.get(String(id))||ui.state.inventory.find(c=>c.id===id)||ui.state.market.map(x=>x.card).find(c=>c.id===id);
+  const card=ui.cardIndex.get(String(id))||ui.state.inventory.find(c=>c.id===id);
   if(!card)return;
   openCardModal(card.definition,card);
 }
@@ -1297,9 +1420,12 @@ function renderCardModal(definition,card){
 function openCardModal(definition,card){
   renderCardModal(definition,card);
   cardModal.showModal();
-  loadKnowledge(definition).then(()=>{
+  Promise.allSettled([
+    loadKnowledge(definition),
+    loadSupplies(definition.id),
+  ]).then(()=>{
     if(cardModal.open)renderCardModal(definition,card);
-  }).catch(()=>{});
+  });
 }
 
 async function listCard(cardId){
@@ -1309,16 +1435,22 @@ async function listCard(cardId){
   if(!Number.isSafeInteger(amount)||amount<=0)return flash("Enter a whole positive Coin amount");
   try{
     await api("/api/market/list",{method:"POST",body:JSON.stringify({cardId,price:amount})});
+    ui.marketData=null;
+    ui.collectionData=null;
     flash("Listed on market");
     await refresh();
+    if(ui.view==="market")loadMarketData({resetPage:true});
   }catch(error){flash(error.message)}
 }
 
 async function buy(listingId){
   try{
     await api("/api/market/buy",{method:"POST",body:JSON.stringify({listingId})});
+    ui.marketData=null;
+    ui.collectionData=null;
     flash("Card acquired");
     await refresh();
+    if(ui.view==="market")loadMarketData();
   }catch(error){flash(error.message)}
 }
 
