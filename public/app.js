@@ -3,6 +3,8 @@ const ui={
   state:null,
   media:new Map(),
   mediaLoading:new Set(),
+  science:new Map(),
+  scienceLoading:new Set(),
   collectionFilter:"ALL",
   query:"",
   reveal:null,
@@ -85,7 +87,7 @@ async function loadMedia(definition){
   if(!definition||definition.kind==="origin"||ui.media.has(definition.id)||ui.mediaLoading.has(definition.id))return;
   ui.mediaLoading.add(definition.id);
   try{
-    const result=await api("/api/media?q="+encodeURIComponent(mediaQuery(definition)));
+    const result=await api("/api/media?definitionId="+encodeURIComponent(definition.id));
     ui.media.set(definition.id,result.media||false);
   }catch{
     ui.media.set(definition.id,false);
@@ -106,6 +108,31 @@ async function warmMedia(definitions,{rerender=true}={}){
     else render();
   }
   return true;
+}
+
+function preferredWikiLang(){
+  const lang=String(navigator.language||"en").toLowerCase().split("-")[0];
+  return /^[a-z]{2,3}$/.test(lang)?lang:"en";
+}
+
+async function loadScience(definition){
+  if(!definition||ui.science.has(definition.id)||ui.scienceLoading.has(definition.id))return ui.science.get(definition.id)||null;
+  ui.scienceLoading.add(definition.id);
+  try{
+    const result=await api("/api/science?definitionId="+encodeURIComponent(definition.id)+"&lang="+encodeURIComponent(preferredWikiLang()));
+    ui.science.set(definition.id,result.science||false);
+    return result.science||null;
+  }catch{
+    ui.science.set(definition.id,false);
+    return null;
+  }finally{
+    ui.scienceLoading.delete(definition.id);
+  }
+}
+
+function sourceButton(url,label,kind){
+  if(!url)return "";
+  return '<a class="source-button '+esc(kind||"")+'" href="'+esc(url)+'" target="_blank" rel="noopener noreferrer">'+esc(label)+' ↗</a>';
 }
 
 function imageMarkup(definition){
@@ -273,9 +300,9 @@ function treeBranch(id,nodes,owned){
   const node=nodes.find(x=>x.id===id);
   if(!node)return "";
   const children=nodes.filter(x=>x.parentId===id);
-  return '<div class="tree-branch"><div class="tree-node '+(owned.has(id)?"owned":"")+' '+(node.rarity==="MYTHIC"?"major":"")+'">'+
+  return '<div class="tree-branch"><button class="tree-node '+(owned.has(id)?"owned":"")+' '+(node.rarity==="MYTHIC"?"major":"")+'" data-definition="'+esc(node.id)+'">'+
     '<span class="tree-icon">'+esc(node.icon||"◌")+'</span><div><b>'+esc(node.commonName)+'</b><small>'+esc(node.rank||node.kind)+' · '+esc((RARITY[node.rarity]||{}).label||node.rarity)+'</small></div>'+
-    (owned.has(id)?'<i>✓</i>':'')+'</div>'+
+    (owned.has(id)?'<i>✓</i>':'')+'</button>'+
     (children.length?'<div class="tree-children">'+children.map(c=>treeBranch(c.id,nodes,owned)).join("")+'</div>':"")+
   '</div>';
 }
@@ -293,6 +320,8 @@ function renderTree(){
         '<div class="tree-roots">'+["bacteria","archaea","eukaryota"].map(id=>treeBranch(id,nodes,owned)).join("")+'</div>'+
       '</div>'+
     '</section>';
+  document.querySelectorAll("[data-definition]").forEach(node=>node.onclick=()=>openDefinition(node.dataset.definition));
+
 }
 
 function renderCodex(){
@@ -391,17 +420,50 @@ function openDefinition(id){
   if(d)openCardModal(d,null);
 }
 
-function openCardModal(definition,card){
+function renderCardModal(definition,card,science){
   const media=getMedia(definition);
+  const wiki=science&&science.wikipedia&&science.wikipedia.available?science.wikipedia:null;
+  const ncbi=science&&science.ncbi&&science.ncbi.available?science.ncbi:null;
+  const overview=wiki&&wiki.extract?wiki.extract:(definition.summary||"Scientific enrichment is loading.");
+  const taxRank=ncbi&&ncbi.rank?ncbi.rank:(definition.rank||definition.temporalStatus||"—");
+  const taxId=ncbi&&ncbi.taxId?ncbi.taxId:"—";
+
   cardModalContent.innerHTML=
     '<div class="detail-layout">'+
       '<div class="detail-card">'+(card?cardHtml(card,{interactive:false}):definitionPreview(definition))+'</div>'+
-      '<div class="detail-copy"><span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span><h2>'+esc(definition.commonName)+'</h2><em>'+esc(definition.scientificName)+'</em><p>'+esc(definition.summary||"")+'</p>'+
-        '<dl><div><dt>Type</dt><dd>'+esc(definition.kind)+'</dd></div><div><dt>Rank</dt><dd>'+esc(definition.rank||definition.temporalStatus||"—")+'</dd></div><div><dt>Parent</dt><dd>'+esc(definition.parentId||"Origin")+'</dd></div>'+(definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+'</dl>'+
-        (media&&media.originalUrl?'<a href="'+esc(media.originalUrl)+'" target="_blank" rel="noopener">Image source · '+esc(media.source)+'</a>':"")+
+      '<div class="detail-copy">'+
+        '<span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span>'+
+        '<h2>'+esc(definition.commonName)+'</h2>'+
+        '<em>'+esc(definition.scientificName)+'</em>'+
+        '<p class="detail-overview">'+esc(overview)+'</p>'+
+        '<dl>'+
+          '<div><dt>Type</dt><dd>'+esc(definition.kind)+'</dd></div>'+
+          '<div><dt>Taxonomic rank</dt><dd>'+esc(taxRank)+'</dd></div>'+
+          '<div><dt>NCBI Taxonomy ID</dt><dd>'+esc(taxId)+'</dd></div>'+
+          '<div><dt>Card parent</dt><dd>'+esc(definition.parentId||"Origin")+'</dd></div>'+
+          (definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+
+          (card?'<div><dt>Edition</dt><dd>'+esc(card.edition)+'</dd></div>':"")+
+        '</dl>'+
+        '<div class="source-actions">'+
+          sourceButton(wiki&&wiki.pageUrl,"Wikipedia","wikipedia")+
+          sourceButton(ncbi&&ncbi.ncbiUrl,"NCBI Taxonomy","ncbi")+
+          sourceButton(ncbi&&ncbi.lifemapUrl,"Open in Lifemap","lifemap")+
+          (media&&media.originalUrl?sourceButton(media.originalUrl,"Image source","commons"):"")+
+        '</div>'+
+        '<div class="source-note">'+
+          '<b>Scientific provenance</b>'+
+          '<span>'+(science?'Wikipedia overview + NCBI taxonomy. Lifemap opens externally using the NCBI taxid.':'Loading live sources…')+'</span>'+
+        '</div>'+
       '</div>'+
     '</div>';
+}
+
+function openCardModal(definition,card){
+  renderCardModal(definition,card,ui.science.get(definition.id)||null);
   cardModal.showModal();
+  Promise.allSettled([loadMedia(definition),loadScience(definition)]).then(()=>{
+    if(cardModal.open)renderCardModal(definition,card,ui.science.get(definition.id)||null);
+  });
 }
 
 async function listCard(cardId){
