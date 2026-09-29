@@ -180,12 +180,16 @@ function knowledgeSourceButtons(knowledge){
 }
 
 function imageMarkup(definition){
+  const hasResolved=ui.media.has(definition.id);
   const media=getMedia(definition);
   if(media&&media.imageUrl){
     return '<img src="'+esc(media.imageUrl)+'" alt="'+esc(definition.commonName)+'" loading="lazy" draggable="false">';
   }
+  if(!hasResolved){
+    return '<div class="art-loading" aria-label="Loading image"><span></span><i></i></div>';
+  }
   const initials=(definition.commonName||definition.scientificName||"?").split(/\s+/).slice(0,2).map(x=>x[0]).join("");
-  return '<div class="art-fallback"><span>'+esc(definition.icon||"◌")+'</span><b>'+esc(initials)+'</b></div>';
+  return '<div class="art-fallback"><span>'+esc(definition.icon||"◌")+'</span><b>'+esc(initials)+'</b><small>No reusable image found</small></div>';
 }
 function cardSummary(definition){
   const knowledge=ui.knowledge.get(definition.id);
@@ -383,7 +387,7 @@ function renderCollection(){
   search?.addEventListener("input",event=>{ui.query=event.target.value;renderCollection();wireCommon()});
   document.querySelectorAll("[data-filter]").forEach(button=>button.onclick=()=>{ui.collectionFilter=button.dataset.filter;renderCollection();wireCommon()});
   document.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{event.stopPropagation();listCard(button.dataset.sell)});
-  warmMedia(filtered.slice(0,24).map(c=>c.definition));
+  warmMedia(filtered.map(c=>c.definition));
 }
 
 function renderMarket(){
