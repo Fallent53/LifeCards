@@ -163,3 +163,31 @@ Lifemap is used only as inspiration for the map-like navigation concept. Its cod
 ## License
 
 The LifeCards source code is proprietary. Third-party scientific data and media retain their original licenses. See [LICENSE](LICENSE) and [docs/data-licensing.md](docs/data-licensing.md).
+
+
+## Large taxonomy & low-cost data strategy
+
+LifeCards does **not** query a remote taxonomy API while the player browses the Tree of Life.
+
+```bash
+npm install
+npm run sync:col
+```
+
+This imports the Catalogue of Life Animalia snapshot into `data/animalia.sqlite`, builds local indexes plus an FTS5 search index, and precomputes direct-child counts. The radial tree then reads only the visible subtree from SQLite.
+
+After changes to the importer/search schema, rerun `npm run sync:col` to rebuild the local taxonomy database.
+
+External enrichment is deliberately lazy:
+
+- Catalogue of Life taxonomy: local snapshot
+- Wikipedia/Wikidata: only when a card/taxon is actually viewed
+- Wikimedia Commons image metadata: only when needed
+- scientific/image results: persistent `data/knowledge.sqlite` cache
+- successful images: cached for up to 90 days by default
+- negative/no-image results: retried after at most 24 hours
+- owned cards can be warmed ahead of time with `npm run prefetch:cards`
+- the small initial curated catalogue can be warmed with `npm run prefetch:catalog`
+- public taxonomy/knowledge API responses use browser/CDN cache headers
+
+This is intentional: prefetching media for millions of species would be slow, wasteful and unfriendly to upstream public APIs.
