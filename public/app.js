@@ -84,11 +84,13 @@ function mediaQuery(definition){
 }
 
 async function loadMedia(definition){
-  if(!definition||definition.kind==="origin"||ui.media.has(definition.id)||ui.mediaLoading.has(definition.id))return;
+  if(!definition||ui.media.has(definition.id)||ui.mediaLoading.has(definition.id))return;
   ui.mediaLoading.add(definition.id);
   try{
-    const result=await api("/api/media?q="+encodeURIComponent(mediaQuery(definition)));
-    ui.media.set(definition.id,result.media||false);
+    const result=await api("/api/knowledge?q="+encodeURIComponent(knowledgeQuery(definition))+"&lang=en");
+    const knowledge=result.knowledge||null;
+    if(knowledge)ui.knowledge.set(definition.id,knowledge);
+    ui.media.set(definition.id,knowledge?.media||false);
   }catch{
     ui.media.set(definition.id,false);
   }finally{
