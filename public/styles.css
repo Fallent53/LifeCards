@@ -186,3 +186,8 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 }
 
 .source-button.col{border-color:#3f7d57;color:#91e6ad;background:#0e2116}
+
+.radial-node.owned .radial-node-halo{fill:#c6ff7130;stroke:#b6f46b;stroke-width:1.4}
+.radial-node.owned .radial-node-dot{fill:#c8ff76;stroke:#efffc7;filter:drop-shadow(0 0 7px #b9ff69)}
+.radial-node.owned .radial-node-label{fill:#efffd9}
+.radial-center.owned .radial-center-core{fill:#2d4218;stroke:#c2f875;filter:drop-shadow(0 0 22px #b9ff69)}
