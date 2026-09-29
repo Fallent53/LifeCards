@@ -179,7 +179,7 @@ function editionClass(edition=""){
 }
 
 function getMedia(definition){
-  return ui.media.get(definition.id)||null;
+  return definition?.media||ui.media.get(definition.id)||null;
 }
 
 function mediaQuery(definition){
@@ -380,7 +380,7 @@ function knowledgeSourceButtons(knowledge){
 
 function imageMarkup(definition){
   ui.definitionIndex.set(String(definition.id),definition);
-  const hasResolved=ui.media.has(definition.id);
+  const hasResolved=Boolean(definition?.mediaResolved)||ui.media.has(definition.id);
   const media=getMedia(definition);
   if(media&&media.imageUrl){
     return '<img src="'+esc(media.imageUrl)+'" alt="'+esc(definition.commonName)+'" loading="lazy" draggable="false">';
