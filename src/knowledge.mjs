@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v3";
+const CACHE_SCHEMA_VERSION = "v4";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -176,12 +176,13 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     null;
 
   let media = null;
+  const looksLikeSpecies=/^[A-Z][a-z-]+\s+[a-z][a-z-]+/.test(taxonName);
   const mediaAttempts = [
     async () => page?.pageimage ? getCommonsFileMetadata(page.pageimage) : null,
     async () => wikidataImage ? getCommonsFileMetadata(wikidataImage) : null,
-    async () => searchCommonsImage(taxonName),
-    async () => normalized !== taxonName ? searchCommonsImage(normalized) : null,
-    async () => searchGbifImage(taxonName),
+    async () => looksLikeSpecies ? searchGbifImage(taxonName) : null,
+    async () => searchCommonsImage(taxonName,{exact:true}),
+    async () => normalized !== taxonName ? searchCommonsImage(normalized,{exact:true}) : null,
   ];
   for (const attempt of mediaAttempts) {
     if (media) break;
