@@ -22,7 +22,8 @@
     "sync:animalia": "node scripts/sync-col.mjs --scope Animalia --output ./data/animalia.sqlite",
     "repair:eukaryota": "node scripts/repair-eukaryota.mjs",
     "debug:media": "node scripts/debug-media.mjs",
-    "reconcile:collection": "node scripts/reconcile-collection.mjs"
+    "reconcile:collection": "node scripts/reconcile-collection.mjs",
+    "audit:collection": "node scripts/audit-cards.mjs --collection --limit 500"
   },
   "engines": {
     "node": ">=22.5.0"
