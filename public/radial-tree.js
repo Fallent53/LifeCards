@@ -102,8 +102,9 @@ export class RadialTreeMap {
       const label = entry.node.commonName || entry.node.canonicalName || entry.node.scientificName;
       const rank = entry.node.rank || entry.node.kind || "";
       const truncated = entry.node.truncatedChildren || entry.node.truncated || 0;
+      const owned = Boolean(this.options.isOwned?.(entry.node));
       return `
-        <g class="radial-node ${major ? "major" : ""} ${leaf ? "leaf" : ""}"
+        <g class="radial-node ${major ? "major" : ""} ${leaf ? "leaf" : ""} ${owned ? "owned" : ""}"
            data-radial-id="${escapeHtml(entry.node.id)}"
            transform="translate(${p.x.toFixed(2)} ${p.y.toFixed(2)})">
           <circle class="radial-node-halo" r="${major ? 17 : 11}"></circle>
@@ -114,6 +115,7 @@ export class RadialTreeMap {
     }).join("");
 
     const rootLabel = escapeHtml(payload.root.commonName || payload.root.scientificName);
+    const rootOwned = Boolean(this.options.isOwned?.(payload.root));
 
     this.container.innerHTML = `
       <div class="radial-map-toolbar">
@@ -139,7 +141,7 @@ export class RadialTreeMap {
             <g class="radial-grid">${circles}</g>
             <g class="radial-edges">${edges}</g>
             <g class="radial-nodes">${nodeMarkup}</g>
-            <g class="radial-center" data-radial-id="${escapeHtml(payload.root.id)}">
+            <g class="radial-center ${rootOwned ? "owned" : ""}" data-radial-id="${escapeHtml(payload.root.id)}">
               <circle class="radial-center-orbit" r="37"></circle>
               <circle class="radial-center-core" r="22"></circle>
               <text y="-2">${rootLabel}</text>
