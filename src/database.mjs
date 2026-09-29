@@ -277,7 +277,7 @@ function hydrateCard(row) {
     definition={
       ...definition,
       media:auditedMedia,
-      mediaResolved:true,
+      mediaResolved:Boolean(auditedMedia?.imageUrl),
     };
   }
   return {
