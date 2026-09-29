@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v11";
+const CACHE_SCHEMA_VERSION = "v12";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
