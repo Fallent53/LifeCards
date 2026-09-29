@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 const ACCEPTED_LICENSE_MARKERS = ["cc by", "cc-by", "cc0", "public domain", "pd-"];
 const memoryCache = new Map();
 
@@ -93,6 +94,69 @@ export async function searchCommonsImage(query) {
     if (!result) continue;
     memoryCache.set(key, result);
     return result;
+  }
+
+  memoryCache.set(key, null);
+  return null;
+}
+
+
+function acceptedGbifMediaLicense(value = "") {
+  const license = String(value).trim().toLowerCase();
+  if (!license) return false;
+  if (license.includes("creativecommons.org/publicdomain") || license.includes("creativecommons.org/zero") || license === "cc0") return true;
+  if (license.includes("creativecommons.org/licenses/by/") || license.includes("creativecommons.org/licenses/by-sa/")) return true;
+  if (/^cc\s*by(?:-sa)?(?:\s|$)/i.test(String(value))) return true;
+  return false;
+}
+
+function gbifImageUrl(recordKey, identifier) {
+  if (!recordKey || !identifier) return identifier || null;
+  const hash = crypto.createHash("md5").update(String(identifier)).digest("hex");
+  return `https://api.gbif.org/v1/image/cache/800x/occurrence/${recordKey}/media/${hash}`;
+}
+
+export async function searchGbifImage(scientificName) {
+  const query = String(scientificName || "").trim();
+  if (!query) return null;
+
+  const key = `gbif:${query.toLowerCase()}`;
+  if (memoryCache.has(key)) return memoryCache.get(key);
+
+  const params = new URLSearchParams({
+    scientificName: query,
+    mediaType: "StillImage",
+    occurrenceStatus: "present",
+    limit: "20",
+  });
+
+  const response = await fetch(`https://api.gbif.org/v1/occurrence/search?${params}`, {
+    signal: AbortSignal.timeout(4500),
+    headers: { "User-Agent": "LifeCards/0.1 (licensed media fallback)" },
+  });
+  if (!response.ok) throw new Error(`GBIF returned ${response.status}`);
+  const json = await response.json();
+
+  for (const occurrence of json?.results ?? []) {
+    for (const item of occurrence.media ?? []) {
+      const identifier = item.identifier || item.references;
+      const license = item.license || "";
+      if (!identifier || !acceptedGbifMediaLicense(license)) continue;
+
+      const result = {
+        imageUrl: gbifImageUrl(occurrence.key, identifier),
+        originalUrl: item.references || identifier,
+        title: occurrence.scientificName || query,
+        creator: cleanHtml(item.creator || occurrence.recordedBy || "Unknown creator"),
+        license: cleanHtml(license),
+        licenseUrl: /^https?:/i.test(license) ? license : null,
+        attribution: cleanHtml(item.rightsHolder || item.creator || occurrence.datasetTitle || "GBIF occurrence media"),
+        source: "GBIF occurrence media",
+        occurrenceKey: occurrence.key || null,
+      };
+      memoryCache.set(key, result);
+      return result;
+    }
   }
 
   memoryCache.set(key, null);
