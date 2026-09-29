@@ -622,6 +622,49 @@ export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
     if(commons)return {...commons,resolver:"commons-exact",confidence:"MEDIUM"};
   }catch{}
 
+  // Exact species media simply does not exist online for a large part of the
+  // long tail. In strict-real-media mode we may use a real photographed
+  // representative of the same genus rather than an icon/drawing.
+  if([
+    "species","subspecies","variety","subvariety","form","subform","strain"
+  ].includes(rankKey)){
+    const genus=query.split(/\s+/)[0]?.trim();
+    if(genus&&normalizeScientificName(genus)!==normalizeScientificName(query)){
+      try{
+        const gbif=await searchGbifImage(genus);
+        if(gbif)return {
+          ...gbif,
+          resolver:"gbif-representative-genus",
+          confidence:"MEDIUM",
+          mediaMatch:"REPRESENTATIVE_GENUS",
+          representedTaxon:genus,
+        };
+      }catch{}
+
+      try{
+        const specimen=await searchIDigBioImage(genus,{rank:"genus"});
+        if(specimen)return {
+          ...specimen,
+          resolver:"idigbio-representative-genus",
+          confidence:"MEDIUM",
+          mediaMatch:"REPRESENTATIVE_GENUS",
+          representedTaxon:genus,
+        };
+      }catch{}
+
+      try{
+        const inat=await searchINaturalistImage(genus,{allowDescendant:true});
+        if(inat)return {
+          ...inat,
+          resolver:"inaturalist-representative-genus",
+          confidence:"MEDIUM",
+          mediaMatch:"REPRESENTATIVE_GENUS",
+          representedTaxon:genus,
+        };
+      }catch{}
+    }
+  }
+
   return null;
 }
 
