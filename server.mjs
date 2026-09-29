@@ -25,14 +25,20 @@ function userId(request) {
   return String(request.headers["x-lifecards-user"] || "explorer").slice(0, 80);
 }
 
-function json(response, status, value) {
+function json(response, status, value, { cacheControl = "no-store" } = {}) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
+    "Cache-Control": cacheControl,
     "Content-Length": Buffer.byteLength(body),
   });
   response.end(body);
+}
+
+function publicJson(response, value, maxAge = 300) {
+  return json(response, 200, value, {
+    cacheControl: `public, max-age=${maxAge}, stale-while-revalidate=86400`,
+  });
 }
 
 async function bodyJson(request) {
@@ -127,13 +133,13 @@ async function api(request, response, url) {
     if (request.method === "GET" && url.pathname === "/api/media") {
       const query = url.searchParams.get("q") || "";
       const media = await searchCommonsImage(query);
-      return json(response, 200, { media });
+      return publicJson(response, { media }, 86400);
     }
     if (request.method === "GET" && url.pathname === "/api/knowledge") {
       const query = url.searchParams.get("q") || "";
       const lang = (url.searchParams.get("lang") || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
       const knowledge = await getKnowledge(query, { lang });
-      return json(response, 200, { knowledge });
+      return publicJson(response, { knowledge }, 86400);
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
       return json(response, 200, { taxonomy: effectiveTaxonomyStatus() });
