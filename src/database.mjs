@@ -5,6 +5,7 @@ import { dirname, resolve } from "node:path";
 import { byId, publicCatalog } from "./catalog.mjs";
 import { DEFAULT_CONFIG, generatePackBlueprint, packsAccrued, cryptoRng } from "./game-engine.mjs";
 import { resolveDefinition, selectImportedDefinition } from "./definitions.mjs";
+import { taxonomyStatus } from "./taxonomy-store.mjs";
 
 const dbPath = resolve(process.env.LIFECARDS_DB_PATH ?? "./data/lifecards.sqlite");
 mkdirSync(dirname(dbPath), { recursive: true });
@@ -441,10 +442,14 @@ export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cr
     db.prepare("UPDATE users SET pack_balance = ?, pack_anchor_at = ? WHERE id = ?")
       .run(nextBalance, anchor, userId);
 
+    const taxonomy = taxonomyStatus();
     const blueprint = generatePackBlueprint({
       rng,
       config,
-      definitionSelector: (rarity, rollRng) => selectImportedDefinition(rarity, rollRng),
+      definitionSelector:
+        taxonomy.ready && taxonomy.dropPoolReady
+          ? (rarity, rollRng) => selectImportedDefinition(rarity, rollRng)
+          : undefined,
     });
     const cards = blueprint.cards.map((slot) => {
       const definition = resolveDefinition(slot.definitionId);
