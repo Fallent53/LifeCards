@@ -1,10 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getWikipediaFileMetadata, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v5";
+const CACHE_SCHEMA_VERSION = "v6";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -78,7 +78,8 @@ async function wikipediaPage(query, lang = "en") {
     titles: query,
     exintro: "1",
     explaintext: "1",
-    piprop: "thumbnail|name",
+    piprop: "thumbnail|name|original",
+    pilicense: "free",
     pithumbsize: "1200",
     wbptterms: "description",
     inprop: "url",
@@ -188,7 +189,13 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     {
       resolver:"wikipedia-pageimage",
       confidence:exactTaxonIdentity?"HIGH":"MEDIUM",
-      run:async () => page?.pageimage ? getCommonsFileMetadata(page.pageimage) : null,
+      run:async () => {
+        if(!page?.pageimage)return null;
+        return (
+          await getCommonsFileMetadata(page.pageimage) ||
+          await getWikipediaFileMetadata(page.pageimage,lang)
+        );
+      },
     },
     {
       resolver:"wikidata-p18",
