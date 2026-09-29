@@ -1,5 +1,5 @@
 import { byId, catalog } from "./catalog.mjs";
-import { getTaxon, pickDropTaxon, taxonomyStatus } from "./taxonomy-store.mjs";
+import { getGameplayTaxon, pickDropTaxon, taxonomyStatus } from "./taxonomy-store.mjs";
 
 const curatedByScientificName = new Map(
   catalog
@@ -87,7 +87,7 @@ export function definitionFromTaxon(taxon) {
 export function resolveDefinition(id) {
   const seed = byId.get(String(id));
   if (seed) return seed;
-  return definitionFromTaxon(getTaxon(String(id)));
+  return definitionFromTaxon(getGameplayTaxon(String(id)));
 }
 
 export function selectImportedDefinition(rarity, rng) {
