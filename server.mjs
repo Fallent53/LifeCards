@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState } from "./src/database.mjs";
+import { claimPack, createListing, buyListing, getState, createKnowledgeQuestion, answerKnowledgeQuestion } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getScientificEnrichment } from "./src/science.mjs";
 import { byId } from "./src/catalog.mjs";
@@ -76,6 +76,18 @@ async function api(request, response, url) {
       if (!definitionId) return json(response, 400, { error: "definitionId is required" });
       const science = await getScientificEnrichment(definitionId, { lang });
       return json(response, 200, { science });
+    }
+    if (request.method === "POST" && url.pathname === "/api/knowledge/question") {
+      return json(response, 201, { question: createKnowledgeQuestion(uid) });
+    }
+    if (request.method === "POST" && url.pathname === "/api/knowledge/answer") {
+      const input = await bodyJson(request);
+      if (!input.questionId || typeof input.option !== "string") {
+        return json(response, 400, { error: "questionId and option are required" });
+      }
+      return json(response, 200, {
+        result: answerKnowledgeQuestion(uid, String(input.questionId), input.option),
+      });
     }
     return json(response, 404, { error: "Not found" });
   } catch (error) {
