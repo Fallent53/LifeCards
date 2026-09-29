@@ -52,3 +52,6 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 
 .favorite{border:0;background:transparent;padding:0;color:#718f80;font-size:21px;line-height:1;transition:.15s}
 .favorite:hover,.favorite.active{color:#b3842c;transform:scale(1.08)}
+
+.origin-tease.discovered{border-color:#805eb6;background:radial-gradient(circle at 90% 0,#4a326d,transparent 52%),#120e1a}
+.origin-tease.discovered .origin-orbit{border-color:#be9cff;box-shadow:0 0 24px #9e73ff33}
