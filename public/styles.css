@@ -269,3 +269,8 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .stack-copies-loading{display:grid;place-items:center;align-content:center;gap:12px;min-height:240px;color:#81968a}
 .stack-copies-loading span{width:30px;height:30px;border:2px solid #254333;border-top-color:#66dc98;border-radius:50%;animation:spin 1s linear infinite}
 .stack-copies-loading b{font-size:9px;letter-spacing:.08em;text-transform:uppercase}
+
+.radial-clade-arc{fill:none;stroke:#5aa178;stroke-width:2.2;stroke-linecap:round;opacity:.18}
+.radial-clade-arc.depth-1{stroke-width:4;opacity:.28}
+.radial-clade-arc.depth-2{stroke-width:3;opacity:.23}
+.radial-map-svg[data-zoom="near"] .radial-clade-arc{opacity:.3}
