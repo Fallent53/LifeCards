@@ -27,7 +27,10 @@ export async function searchCommonsImage(query) {
     iiprop: "url|extmetadata",
     iiurlwidth: "900",
   });
-  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`);
+  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
+    signal: AbortSignal.timeout(3000),
+    headers: { "User-Agent": "LifeCards/0.1 (image metadata lookup)" },
+  });
   if (!response.ok) throw new Error(`Wikimedia Commons returned ${response.status}`);
   const json = await response.json();
   const pages = Object.values(json?.query?.pages ?? {});
