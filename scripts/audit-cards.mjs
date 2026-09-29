@@ -1,0 +1,302 @@
+import { DatabaseSync } from "node:sqlite";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { getKnowledge } from "../src/knowledge.mjs";
+
+const args=new Map();
+for(let i=2;i<process.argv.length;i+=1){
+  const arg=process.argv[i];
+  if(!arg.startsWith("--"))continue;
+  const [key,inline]=arg.slice(2).split("=",2);
+  if(inline!==undefined)args.set(key,inline);
+  else if(process.argv[i+1]&&!process.argv[i+1].startsWith("--"))args.set(key,process.argv[++i]);
+  else args.set(key,"true");
+}
+
+const taxonomyPath=resolve(
+  args.get("taxonomy")||
+  process.env.LIFECARDS_TAXONOMY_DB||
+  "./data/animalia.sqlite"
+);
+const qualityPath=resolve(
+  args.get("output")||
+  process.env.LIFECARDS_CARD_QUALITY_DB||
+  "./data/card-quality.sqlite"
+);
+const reportPath=resolve(
+  args.get("report")||
+  "./data/card-quality-report.json"
+);
+const statusOnly=args.get("status")==="true";
+const auditAll=args.get("all")==="true";
+const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
+const limit=auditAll?Number.MAX_SAFE_INTEGER:Math.max(1,Number(args.get("limit")||defaultBatch));
+const concurrency=Math.max(1,Math.min(6,Number(args.get("concurrency")||process.env.LIFECARDS_AUDIT_CONCURRENCY||3)));
+
+if(!existsSync(taxonomyPath)){
+  console.error("Gameplay taxonomy not found:",taxonomyPath);
+  console.error("Run npm run sync:col first.");
+  process.exit(1);
+}
+
+mkdirSync(dirname(qualityPath),{recursive:true});
+const taxonomy=new DatabaseSync(taxonomyPath,{readOnly:true});
+taxonomy.exec("PRAGMA query_only=ON");
+
+const quality=new DatabaseSync(qualityPath);
+quality.exec(`
+  PRAGMA journal_mode=WAL;
+  CREATE TABLE IF NOT EXISTS card_quality(
+    taxon_id TEXT PRIMARY KEY,
+    scientific_name TEXT NOT NULL,
+    common_name TEXT,
+    rank TEXT,
+    rarity TEXT,
+    status TEXT NOT NULL,
+    reason TEXT,
+    media_url TEXT,
+    media_source TEXT,
+    media_resolver TEXT,
+    media_confidence TEXT,
+    media_creator TEXT,
+    media_license TEXT,
+    wikipedia_url TEXT,
+    wikidata_id TEXT,
+    ncbi_tax_id TEXT,
+    checked_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS card_quality_status_idx ON card_quality(status);
+  CREATE TABLE IF NOT EXISTS meta(
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+`);
+
+function scalar(db,sql,...params){
+  return Number(db.prepare(sql).get(...params)?.value||0);
+}
+
+function totalDroppable(){
+  return scalar(taxonomy,"SELECT COUNT(*) AS value FROM drop_pool");
+}
+
+function stats(){
+  const total=totalDroppable();
+  const rows=quality.prepare(
+    "SELECT status,COUNT(*) AS count FROM card_quality GROUP BY status ORDER BY status"
+  ).all();
+  const byStatus=Object.fromEntries(rows.map(row=>[row.status,Number(row.count)]));
+  const checked=Object.values(byStatus).reduce((a,b)=>a+b,0);
+  return {
+    totalDroppable:total,
+    checked,
+    unchecked:Math.max(0,total-checked),
+    ready:byStatus.READY||0,
+    review:byStatus.REVIEW||0,
+    noImage:byStatus.NO_IMAGE||0,
+    badData:byStatus.BAD_DATA||0,
+    error:byStatus.ERROR||0,
+    complete:total>0&&checked>=total,
+    byStatus,
+  };
+}
+
+function printStats(label="Card quality"){
+  const value=stats();
+  console.log("");
+  console.log(label);
+  console.log("─".repeat(52));
+  console.log(`Droppable taxa : ${value.totalDroppable.toLocaleString()}`);
+  console.log(`Checked        : ${value.checked.toLocaleString()}`);
+  console.log(`READY          : ${value.ready.toLocaleString()}`);
+  console.log(`REVIEW         : ${value.review.toLocaleString()}`);
+  console.log(`NO_IMAGE       : ${value.noImage.toLocaleString()}`);
+  console.log(`BAD_DATA       : ${value.badData.toLocaleString()}`);
+  console.log(`ERROR          : ${value.error.toLocaleString()}`);
+  console.log(`Unchecked      : ${value.unchecked.toLocaleString()}`);
+  console.log(`Complete       : ${value.complete?"yes":"no"}`);
+  return value;
+}
+
+if(statusOnly){
+  const value=printStats();
+  writeFileSync(reportPath,JSON.stringify({
+    generatedAt:new Date().toISOString(),
+    taxonomyPath,
+    qualityPath,
+    ...value,
+  },null,2));
+  taxonomy.close();
+  quality.close();
+  process.exit(0);
+}
+
+const rows=taxonomy.prepare(`
+  SELECT
+    p.taxon_id AS id,
+    p.rarity,
+    t.scientific_name,
+    t.canonical_name,
+    t.common_name,
+    t.rank,
+    t.status AS taxonomic_status
+  FROM drop_pool p
+  JOIN taxa t ON t.id=p.taxon_id
+  LEFT JOIN card_quality q ON 1=0
+  WHERE p.taxon_id NOT IN (SELECT taxon_id FROM card_quality)
+  ORDER BY
+    CASE p.rarity
+      WHEN 'MYTHIC' THEN 1
+      WHEN 'LEGENDARY' THEN 2
+      WHEN 'ULTRA_RARE' THEN 3
+      WHEN 'SUPER_RARE' THEN 4
+      WHEN 'RARE' THEN 5
+      WHEN 'UNCOMMON' THEN 6
+      ELSE 7
+    END,
+    p.slot
+  LIMIT ?
+`).all(limit);
+
+if(!rows.length){
+  printStats("Nothing left to audit");
+  taxonomy.close();
+  quality.close();
+  process.exit(0);
+}
+
+const upsert=quality.prepare(`
+  INSERT INTO card_quality(
+    taxon_id,scientific_name,common_name,rank,rarity,status,reason,
+    media_url,media_source,media_resolver,media_confidence,
+    media_creator,media_license,wikipedia_url,wikidata_id,ncbi_tax_id,checked_at
+  )
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(taxon_id) DO UPDATE SET
+    scientific_name=excluded.scientific_name,
+    common_name=excluded.common_name,
+    rank=excluded.rank,
+    rarity=excluded.rarity,
+    status=excluded.status,
+    reason=excluded.reason,
+    media_url=excluded.media_url,
+    media_source=excluded.media_source,
+    media_resolver=excluded.media_resolver,
+    media_confidence=excluded.media_confidence,
+    media_creator=excluded.media_creator,
+    media_license=excluded.media_license,
+    wikipedia_url=excluded.wikipedia_url,
+    wikidata_id=excluded.wikidata_id,
+    ncbi_tax_id=excluded.ncbi_tax_id,
+    checked_at=excluded.checked_at
+`);
+
+function classify(row,knowledge){
+  const scientific=String(row.scientific_name||"").trim();
+  const rank=String(row.rank||"").trim();
+  if(!scientific||!rank){
+    return {status:"BAD_DATA",reason:"missing scientific name or rank"};
+  }
+
+  const media=knowledge?.media||null;
+  if(!media?.imageUrl){
+    return {status:"NO_IMAGE",reason:"no reusable licensed image resolved"};
+  }
+
+  const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
+  if(!requiredAttribution){
+    return {status:"REVIEW",reason:"image found but attribution metadata incomplete"};
+  }
+
+  const confidence=String(media.confidence||"LOW").toUpperCase();
+  if(confidence==="HIGH"){
+    return {status:"READY",reason:"high-confidence taxon-linked licensed image"};
+  }
+
+  return {
+    status:"REVIEW",
+    reason:`image requires review (${media.resolver||"unknown resolver"} / ${confidence})`,
+  };
+}
+
+let cursor=0;
+let processed=0;
+const runStarted=Date.now();
+
+async function worker(){
+  while(cursor<rows.length){
+    const index=cursor++;
+    const row=rows[index];
+    let knowledge=null;
+    let classification=null;
+
+    try{
+      knowledge=await getKnowledge(row.scientific_name,{lang:"en"});
+      classification=classify(row,knowledge);
+    }catch(error){
+      classification={status:"ERROR",reason:String(error?.message||error)};
+    }
+
+    const media=knowledge?.media||null;
+    upsert.run(
+      String(row.id),
+      row.scientific_name,
+      row.common_name||row.canonical_name||row.scientific_name,
+      row.rank||"",
+      row.rarity||"",
+      classification.status,
+      classification.reason,
+      media?.imageUrl||null,
+      media?.source||null,
+      media?.resolver||null,
+      media?.confidence||null,
+      media?.creator||null,
+      media?.license||null,
+      knowledge?.wikipedia?.pageUrl||null,
+      knowledge?.wikidata?.id||null,
+      knowledge?.taxonomy?.ncbiTaxId||null,
+      Date.now()
+    );
+
+    processed+=1;
+    console.log(
+      `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${row.scientific_name} · ${media?.resolver||"no-media"}`
+    );
+  }
+}
+
+await Promise.all(
+  Array.from({length:Math.min(concurrency,rows.length)},()=>worker())
+);
+
+const finalStats=stats();
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('last_run_at',?)"
+).run(new Date().toISOString());
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('taxonomy_path',?)"
+).run(taxonomyPath);
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('complete',?)"
+).run(finalStats.complete?"1":"0");
+
+const report={
+  generatedAt:new Date().toISOString(),
+  durationMs:Date.now()-runStarted,
+  batchProcessed:processed,
+  taxonomyPath,
+  qualityPath,
+  ...finalStats,
+};
+writeFileSync(reportPath,JSON.stringify(report,null,2));
+
+printStats("Audit complete");
+console.log("");
+console.log("Report:",reportPath);
+console.log("Quality DB:",qualityPath);
+if(!finalStats.complete){
+  console.log("Run npm run audit:cards again to continue, or npm run audit:cards:full for the remaining pool.");
+}
+
+taxonomy.close();
+quality.close();
