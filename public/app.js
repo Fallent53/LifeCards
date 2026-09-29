@@ -13,7 +13,11 @@ const ui={
   knowledgeQuestion:null,
   knowledgeResult:null,
   knowledgeLoading:false,
-  marketMode:"fixed"
+  marketMode:"fixed",
+  codexQuery:"",
+  externalTaxa:[],
+  taxonomySearchLoading:false,
+  taxonomySearchTimer:null
 };
 
 const main=document.getElementById("main");
@@ -477,18 +481,97 @@ async function answerKnowledge(option){
   finally{ui.knowledgeLoading=false}
 }
 
+function renderCodexResults(){
+  const localGrid=document.getElementById("codexLocalGrid");
+  const externalGrid=document.getElementById("externalTaxaResults");
+  if(!localGrid||!externalGrid)return;
+
+  const q=ui.codexQuery.trim().toLowerCase();
+  const local=ui.state.catalog.filter(d=>{
+    if(!q)return true;
+    return [d.commonName,d.scientificName,d.rarity,d.rank,d.kind]
+      .some(value=>String(value||"").toLowerCase().includes(q));
+  });
+
+  localGrid.innerHTML=local.length
+    ? local.map(d=>
+        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">COLLECTIBLE · '+esc(d.kind)+' · '+esc(d.rarity)+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(d.summary||"")+'</p></div><span class="codex-arrow">→</span></article>'
+      ).join("")
+    : '<div class="empty-state">No collectible card matches this search yet.</div>';
+
+  document.querySelectorAll("#codexLocalGrid [data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
+  warmMedia(local.slice(0,24),{rerender:false}).then(changed=>{
+    if(changed&&ui.view==="codex")renderCodexResults();
+  }).catch(()=>{});
+
+  if(q.length<2){
+    externalGrid.innerHTML='<div class="taxonomy-hint">Type at least 2 characters to search the full NCBI taxonomy.</div>';
+    return;
+  }
+
+  if(ui.taxonomySearchLoading){
+    externalGrid.innerHTML='<div class="taxonomy-hint loading">Searching NCBI Taxonomy…</div>';
+    return;
+  }
+
+  externalGrid.innerHTML=ui.externalTaxa.length
+    ? ui.externalTaxa.map(item=>
+        '<article class="external-taxon"><div><span>NCBI TAXONOMY · '+esc(item.rank||"unranked")+'</span><h3>'+esc(item.scientificName||item.commonName||("Taxon "+item.taxId))+'</h3><p>Taxid '+esc(item.taxId)+(item.commonName?' · '+esc(item.commonName):"")+'</p></div><div class="external-actions">'+sourceButton(item.ncbiUrl,"NCBI","ncbi")+sourceButton(item.lifemapUrl,"Lifemap","lifemap")+'</div></article>'
+      ).join("")
+    : '<div class="taxonomy-hint">No NCBI taxonomy result for this query.</div>';
+}
+
+async function runTaxonomySearch(query){
+  const expected=query.trim();
+  if(expected.length<2){
+    ui.externalTaxa=[];
+    ui.taxonomySearchLoading=false;
+    renderCodexResults();
+    return;
+  }
+
+  ui.taxonomySearchLoading=true;
+  renderCodexResults();
+  try{
+    const response=await api("/api/taxonomy/search?q="+encodeURIComponent(expected));
+    if(ui.codexQuery.trim()!==expected)return;
+    ui.externalTaxa=response.results||[];
+  }catch(error){
+    if(ui.codexQuery.trim()===expected){
+      ui.externalTaxa=[];
+      flash("NCBI search unavailable: "+error.message);
+    }
+  }finally{
+    if(ui.codexQuery.trim()===expected){
+      ui.taxonomySearchLoading=false;
+      renderCodexResults();
+    }
+  }
+}
+
 function renderCodex(){
-  const catalog=ui.state.catalog;
   main.innerHTML=
     '<section class="codex-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Every collectible points back to the scientific record. Gameplay rarity and biological conservation are deliberately separate.</p></div>'+
-      '<div class="codex-grid">'+catalog.map(d=>
-        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rarity)+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(d.summary||"")+'</p></div><span class="codex-arrow">→</span></article>'
-      ).join("")+'</div>'+
+      '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Collectible cards are editorially curated. Search beyond the card pool to explore the full NCBI taxonomy and jump directly into Lifemap.</p></div>'+
+      '<label class="search-box codex-search"><span>⌕</span><input id="codexSearch" placeholder="Search lion, Panthera, Mollusca..." value="'+esc(ui.codexQuery)+'"></label>'+
+      '<div class="codex-section-head"><span class="eyebrow">COLLECTIBLE CATALOG</span><small>'+ui.state.catalog.length+' curated definitions</small></div>'+
+      '<div id="codexLocalGrid" class="codex-grid"></div>'+
+      '<div class="codex-section-head external"><span class="eyebrow">GLOBAL TAXONOMY</span><small>NCBI → Lifemap</small></div>'+
+      '<div id="externalTaxaResults" class="external-taxa-grid"></div>'+
     '</section>';
-  document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
-  warmMedia(catalog.filter(d=>d.kind!=="origin").slice(0,24));
+
+  renderCodexResults();
+
+  const search=document.getElementById("codexSearch");
+  search?.addEventListener("input",event=>{
+    ui.codexQuery=event.target.value;
+    ui.externalTaxa=[];
+    renderCodexResults();
+    clearTimeout(ui.taxonomySearchTimer);
+    ui.taxonomySearchTimer=setTimeout(()=>runTaxonomySearch(ui.codexQuery),450);
+  });
 }
+
 
 function wireCommon(){
   document.querySelectorAll("[data-view]").forEach(button=>{
