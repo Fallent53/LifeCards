@@ -179,7 +179,9 @@ quality.exec(`
     media_license,
     checked_at
   FROM card_quality
-  WHERE media_url IS NOT NULL AND trim(media_url)<>'';
+  WHERE status='READY'
+    AND media_url IS NOT NULL
+    AND trim(media_url)<>'';
 `);
 
 try{
