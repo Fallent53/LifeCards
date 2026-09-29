@@ -189,8 +189,8 @@ async function api(request, response, url) {
     if (request.method === "GET" && url.pathname === "/api/taxonomy/subtree") {
       const root = url.searchParams.get("root") || "";
       const depth = Math.max(1, Math.min(5, Number(url.searchParams.get("depth") || 3)));
-      const childLimit = Math.max(6, Math.min(100, Number(url.searchParams.get("childLimit") || 42)));
-      const nodeLimit = Math.max(50, Math.min(1400, Number(url.searchParams.get("nodeLimit") || 850)));
+      const childLimit = Math.max(6, Math.min(180, Number(url.searchParams.get("childLimit") || 42)));
+      const nodeLimit = Math.max(50, Math.min(1800, Number(url.searchParams.get("nodeLimit") || 850)));
       return json(response, 200, await effectiveGetSubtree(root, { depth, childLimit, nodeLimit }));
     }
     if (request.method === "GET" && url.pathname === "/api/health") {
