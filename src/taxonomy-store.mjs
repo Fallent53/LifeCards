@@ -9,6 +9,9 @@ const gameplayTaxonomyPath = resolve(
 const mapTaxonomyPath = resolve(
   process.env.LIFECARDS_MAP_TAXONOMY_DB ?? "./data/life.sqlite"
 );
+const cardQualityPath = resolve(
+  process.env.LIFECARDS_CARD_QUALITY_DB ?? "./data/card-quality.sqlite"
+);
 
 const openDatabases = new Map();
 
@@ -58,6 +61,72 @@ function openGameplayDb() {
 
 function openMapDb() {
   return openValidatedDb(mapTaxonomyPath) || openGameplayDb();
+}
+
+let qualityDb = null;
+let qualityDbChecked = false;
+
+function openQualityDb() {
+  if (qualityDbChecked) return qualityDb;
+  qualityDbChecked = true;
+  if (!existsSync(cardQualityPath)) return null;
+
+  try {
+    const db = new DatabaseSync(cardQualityPath, { readOnly: true });
+    db.exec("PRAGMA query_only=ON;");
+    if (!tableExists(db, "card_quality") || !tableExists(db, "meta")) {
+      db.close();
+      return null;
+    }
+    qualityDb = db;
+    return qualityDb;
+  } catch {
+    return null;
+  }
+}
+
+function cardQualityStatus() {
+  const db = openQualityDb();
+  if (!db) {
+    return {
+      available: false,
+      complete: false,
+      ready: 0,
+      review: 0,
+      noImage: 0,
+      badData: 0,
+      error: 0,
+      checked: 0,
+      totalDroppable: 0,
+      readyPoolActive: false,
+    };
+  }
+
+  const counts = Object.fromEntries(
+    db.prepare("SELECT status,COUNT(*) AS count FROM card_quality GROUP BY status")
+      .all()
+      .map((row) => [String(row.status), Number(row.count)])
+  );
+  const complete = metaValue(db, "complete") === "1";
+  const checked = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
+  const readyPoolActive =
+    complete &&
+    tableExists(db, "ready_drop_pool") &&
+    tableExists(db, "ready_drop_pool_stats");
+
+  return {
+    available: true,
+    complete,
+    ready: counts.READY || 0,
+    review: counts.REVIEW || 0,
+    noImage: counts.NO_IMAGE || 0,
+    badData: counts.BAD_DATA || 0,
+    error: counts.ERROR || 0,
+    checked,
+    totalDroppable: checked,
+    readyPoolActive,
+    databasePath: cardQualityPath,
+  };
 }
 
 function metaValue(db, key) {
@@ -238,6 +307,7 @@ export function taxonomyStatus() {
       fullLifeMap: false,
       dropPoolReady: false,
       dropPool: {},
+      cardQuality: cardQualityStatus(),
       hint:
         "Run npm install && npm run sync:col to build the Animalia gameplay taxonomy. " +
         "Run npm run sync:map for the optional full-life map.",
@@ -290,6 +360,7 @@ export function taxonomyStatus() {
     fullLifeMap,
     dropPoolReady: hasDropPool,
     dropPool,
+    cardQuality: cardQualityStatus(),
   };
 }
 
@@ -310,6 +381,33 @@ export function pickDropTaxon(rarity, rng) {
   if (!db) return null;
 
   try {
+    const quality = cardQualityStatus();
+    if (quality.readyPoolActive) {
+      const qdb = openQualityDb();
+      const stat = qdb
+        .prepare("SELECT card_count FROM ready_drop_pool_stats WHERE rarity = ?")
+        .get(String(rarity));
+      const count = Number(stat?.card_count || 0);
+      if (!count) return null;
+
+      const slot =
+        (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
+      const ready = qdb
+        .prepare("SELECT taxon_id FROM ready_drop_pool WHERE rarity = ? AND slot = ? LIMIT 1")
+        .get(String(rarity), slot);
+      if (!ready?.taxon_id) return null;
+
+      const row = db
+        .prepare(`
+          SELECT t.*, ? AS pool_rarity
+          FROM taxa t
+          WHERE t.id = ?
+          LIMIT 1
+        `)
+        .get(String(rarity), String(ready.taxon_id));
+      return mapRow(row);
+    }
+
     const stat = db
       .prepare("SELECT card_count FROM drop_pool_stats WHERE rarity = ?")
       .get(String(rarity));
