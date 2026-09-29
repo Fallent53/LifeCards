@@ -241,3 +241,41 @@ export async function searchGbifImage(scientificName) {
   memoryCache.set(key, null);
   return null;
 }
+
+
+export async function getWikipediaFilesMetadataBatch(fileNames, lang = "en") {
+  const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
+  const unique=[...new Set((fileNames||[])
+    .map((name)=>String(name||"").replace(/^File:/i,"").trim())
+    .filter(Boolean))];
+  const output={};
+
+  for(let offset=0;offset<unique.length;offset+=40){
+    const chunk=unique.slice(offset,offset+40);
+    const params=new URLSearchParams({
+      action:"query",
+      format:"json",
+      origin:"*",
+      titles:chunk.map((name)=>`File:${name}`).join("|"),
+      prop:"imageinfo",
+      iiprop:"url|extmetadata",
+      iiextmetadatafilter:"Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
+      iiurlwidth:"1200",
+    });
+
+    let json=null;
+    try{
+      json=await wikipediaFileQuery(safeLang,params);
+    }catch{
+      json=null;
+    }
+
+    for(const page of Object.values(json?.query?.pages??{})){
+      const name=String(page?.title||"").replace(/^File:/i,"").trim();
+      if(!name)continue;
+      output[name.toLowerCase()]=mediaFromPage(page,`Wikipedia (${safeLang})`);
+    }
+  }
+
+  return output;
+}
