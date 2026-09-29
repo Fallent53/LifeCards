@@ -87,6 +87,8 @@ function openQualityDb() {
 
 function cardQualityStatus() {
   const db = openQualityDb();
+  const gameplayDb = openGameplayDb();
+
   if (!db) {
     return {
       available: false,
@@ -102,12 +104,50 @@ function cardQualityStatus() {
     };
   }
 
-  const counts = Object.fromEntries(
-    db.prepare("SELECT status,COUNT(*) AS count FROM card_quality GROUP BY status")
-      .all()
-      .map((row) => [String(row.status), Number(row.count)])
-  );
-  const complete = metaValue(db, "complete") === "1";
+  const expectedScope = gameplayDb ? String(metaValue(gameplayDb, "scope") || "") : "";
+  const auditedScope = String(metaValue(db, "taxonomy_scope") || "");
+  const resolverVersion = String(metaValue(db, "resolver_version") || "");
+  const expectedResolver = "v3-canonical-authorship-wikipedia";
+  const compatible =
+    Boolean(expectedScope) &&
+    auditedScope.toLowerCase() === expectedScope.toLowerCase() &&
+    resolverVersion === expectedResolver;
+
+  let counts = {};
+  let totalDroppable = 0;
+
+  if (compatible && gameplayDb && tableExists(gameplayDb, "drop_pool")) {
+    try {
+      gameplayDb.prepare("ATTACH DATABASE ? AS qualitystatus").run(cardQualityPath);
+      try {
+        counts = Object.fromEntries(
+          gameplayDb.prepare(`
+            SELECT q.status,COUNT(*) AS count
+            FROM drop_pool p
+            JOIN qualitystatus.card_quality q ON q.taxon_id=p.taxon_id
+            WHERE q.resolver_version=?
+            GROUP BY q.status
+          `).all(expectedResolver)
+            .map((row) => [String(row.status), Number(row.count)])
+        );
+        totalDroppable = Number(
+          gameplayDb.prepare("SELECT COUNT(*) AS count FROM drop_pool").get()?.count || 0
+        );
+      } finally {
+        gameplayDb.exec("DETACH DATABASE qualitystatus");
+      }
+    } catch {
+      counts = {};
+      totalDroppable = 0;
+    }
+  }
+
+  const complete =
+    compatible &&
+    metaValue(db, "complete") === "1" &&
+    totalDroppable > 0 &&
+    Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0) >= totalDroppable;
+
   const checked = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
   const readyPoolActive =
     complete &&
@@ -116,6 +156,7 @@ function cardQualityStatus() {
 
   return {
     available: true,
+    compatible,
     complete,
     ready: counts.READY || 0,
     review: counts.REVIEW || 0,
@@ -123,8 +164,10 @@ function cardQualityStatus() {
     badData: counts.BAD_DATA || 0,
     error: counts.ERROR || 0,
     checked,
-    totalDroppable: checked,
+    totalDroppable,
     readyPoolActive,
+    resolverVersion,
+    auditedScope,
     databasePath: cardQualityPath,
   };
 }
