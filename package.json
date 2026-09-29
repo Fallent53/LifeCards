@@ -23,7 +23,8 @@
     "repair:eukaryota": "node scripts/repair-eukaryota.mjs",
     "debug:media": "node scripts/debug-media.mjs",
     "reconcile:collection": "node scripts/reconcile-collection.mjs",
-    "audit:collection": "node scripts/audit-cards.mjs --collection --limit 500"
+    "audit:collection": "node scripts/audit-cards.mjs --collection --limit 500",
+    "audit:wikimedia": "node scripts/audit-cards.mjs --limit 1000"
   },
   "engines": {
     "node": ">=22.5.0"
