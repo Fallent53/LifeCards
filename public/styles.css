@@ -49,3 +49,6 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .source-meta{display:flex;flex-direction:column;gap:4px;margin-top:15px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:8px}
 .source-meta small{color:#72867a}
 .codex-row[data-definition],.tree-node[data-definition]{user-select:none}
+
+.favorite{border:0;background:transparent;padding:0;color:#718f80;font-size:21px;line-height:1;transition:.15s}
+.favorite:hover,.favorite.active{color:#b3842c;transform:scale(1.08)}
