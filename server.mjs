@@ -7,7 +7,8 @@ import { searchCommonsImage } from "./src/media.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
-const preferredPort = Number(process.env.PORT ?? 3000);\nconst hasExplicitPort = process.env.PORT != null;
+const preferredPort = Number(process.env.PORT ?? 3000);
+const hasExplicitPort = process.env.PORT != null;
 
 const mime = {
   ".html": "text/html; charset=utf-8",
