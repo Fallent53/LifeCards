@@ -112,6 +112,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
 
   const taxId = claimValue(entity, "P685");
   const taxonName = claimValue(entity, "P225") || normalized;
+  const wikidataImage = claimValue(entity, "P18");
   const description =
     entity?.descriptions?.[lang]?.value ||
     entity?.descriptions?.en?.value ||
@@ -121,6 +122,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   let media = null;
   try {
     if (page?.pageimage) media = await getCommonsFileMetadata(page.pageimage);
+    if (!media && wikidataImage) media = await getCommonsFileMetadata(wikidataImage);
     if (!media) media = await searchCommonsImage(taxonName);
   } catch {
     media = null;
@@ -145,6 +147,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
           pageUrl: `https://www.wikidata.org/wiki/${qid}`,
           taxonName,
           ncbiTaxId: taxId,
+          imageFile: wikidataImage,
         }
       : null,
     taxonomy: {
