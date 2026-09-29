@@ -33,6 +33,7 @@ const ui={
   codexSearchLoading:false,
   codexRank:"ALL",
   codexOwned:new Set(),
+  codexOwnershipLoaded:false,
   taxonomyContext:new Map(),
   taxonomyContextLoading:new Set(),
   treeQuery:"",
@@ -1199,6 +1200,7 @@ async function refreshCodexOwnership(definitions){
   const names=[...new Set(definitions.map(d=>d?.scientificName).filter(Boolean))].slice(0,200);
   if(!names.length){
     ui.codexOwned=new Set();
+    ui.codexOwnershipLoaded=true;
     return;
   }
   try{
@@ -1209,6 +1211,8 @@ async function refreshCodexOwnership(definitions){
     ui.codexOwned=new Set((result.scientificNames||[]).map(name=>String(name).toLowerCase()));
   }catch{
     ui.codexOwned=new Set();
+  }finally{
+    ui.codexOwnershipLoaded=true;
   }
 }
 
@@ -1229,6 +1233,7 @@ function scheduleCodexSearch(query){
   if(q.length<2){
     ui.codexResults=[];
     ui.codexSearchLoading=false;
+    ui.codexOwnershipLoaded=false;
     refreshCodexOwnership(ui.state.catalog||[]).finally(()=>{
       if(ui.view==="codex")renderCodex();
     });
@@ -1237,6 +1242,7 @@ function scheduleCodexSearch(query){
   }
 
   ui.codexSearchLoading=true;
+  ui.codexOwnershipLoaded=false;
   renderCodex();
 
   codexSearchTimer=setTimeout(async()=>{
@@ -1318,7 +1324,7 @@ function renderCodex(){
   document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
   wireMediaObservers();
 
-  if(!q&&ui.codexOwned.size===0&&base.length){
+  if(!q&&!ui.codexOwnershipLoaded&&base.length){
     queueMicrotask(()=>refreshCodexOwnership(base).then(()=>{
       if(ui.view==="codex")renderCodex();
     }));
@@ -1738,10 +1744,12 @@ cardModal.addEventListener("click",event=>{if(event.target===cardModal)cardModal
 
 setInterval(()=>{
   if(!ui.state)return;
-  const timerEl=document.getElementById("nextPackTimer");
-  if(timerEl&&ui.state.user.packs<ui.state.user.maxPacks){
+  if(ui.state.user.packs<ui.state.user.maxPacks){
     const remaining=liveNextPackMs();
-    timerEl.textContent="Next in "+formatTimer(remaining);
+    const timerEl=document.getElementById("nextPackTimer");
+    const openTimer=document.getElementById("openPackTimer");
+    if(timerEl)timerEl.textContent="Next "+formatTimer(remaining);
+    if(openTimer)openTimer.textContent=formatTimer(remaining);
     if(remaining<=0&&!revealDialog.open)refresh().catch(()=>{});
   }
 },1000);
