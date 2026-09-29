@@ -174,7 +174,7 @@ npm install
 npm run sync:col
 ```
 
-This imports the Catalogue of Life Animalia snapshot into `data/animalia.sqlite`, builds local indexes plus an FTS5 search index, and precomputes direct-child counts. The radial tree then reads only the visible subtree from SQLite.
+This imports the Catalogue of Life Animalia snapshot into `data/animalia.sqlite`, builds local indexes plus an FTS5 search index, and precomputes direct-child counts. By default it downloads the official **latest Base Release DwCA** once and keeps the archive locally, so rebuilding the SQLite indexes does not repeatedly consume hundreds of MB of bandwidth. Use `npm run sync:col -- --refresh` when you intentionally want a newer upstream snapshot. The radial tree then reads only the visible subtree from SQLite.
 
 After changes to the importer/search schema, rerun `npm run sync:col` to rebuild the local taxonomy database.
 
