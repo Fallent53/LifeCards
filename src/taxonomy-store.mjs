@@ -187,35 +187,79 @@ export function getAuditedMedia(taxonId, scientificName = "") {
   const auditedScope=String(metaValue(db,"taxonomy_scope")||"");
   const gameplayDb=openGameplayDb();
   const expectedScope=gameplayDb?String(metaValue(gameplayDb,"scope")||""):"";
-  const resolverVersion=String(metaValue(db,"resolver_version")||"");
 
+  // Media display is allowed to bridge resolver migrations. The gameplay
+  // drop pool remains version-gated in cardQualityStatus(); this only keeps
+  // already-known local artwork visible while v18 progressively rebuilds.
   if(
     !expectedScope ||
-    auditedScope.toLowerCase()!==expectedScope.toLowerCase() ||
-    resolverVersion!==CURRENT_MEDIA_RESOLVER
+    auditedScope.toLowerCase()!==expectedScope.toLowerCase()
   )return null;
+
+  const id=String(taxonId||"");
+  const name=String(scientificName||"");
+
+  if(tableExists(db,"media_index")){
+    try{
+      const indexed=db.prepare(`
+        SELECT
+          taxon_id,scientific_name,provider,image_url,source_url,resolver,
+          confidence,creator,license,exactness,score
+        FROM media_index
+        WHERE image_url IS NOT NULL
+          AND trim(image_url)<>''
+          AND (
+            taxon_id=?
+            OR normalized_name=lower(trim(?))
+          )
+        ORDER BY
+          CASE WHEN taxon_id=? THEN 0 ELSE 1 END,
+          score DESC
+        LIMIT 1
+      `).get(id,name,id);
+
+      if(indexed?.image_url){
+        return {
+          imageUrl:indexed.image_url,
+          originalUrl:indexed.source_url||indexed.image_url,
+          source:indexed.provider||"LifeCards local media index",
+          resolver:indexed.resolver||"local-media-index",
+          confidence:indexed.confidence||null,
+          creator:indexed.creator||null,
+          license:indexed.license||null,
+          mediaMatch:indexed.exactness||null,
+          audited:true,
+          cached:true,
+          taxonId:String(indexed.taxon_id),
+        };
+      }
+    }catch{
+      // Fall through to card_quality for pre-index databases.
+    }
+  }
 
   try{
     const row=db.prepare(`
       SELECT
         taxon_id,scientific_name,status,media_url,media_source,media_resolver,
-        media_confidence,media_creator,media_license,wikipedia_url
+        media_confidence,media_creator,media_license,wikipedia_url,resolver_version
       FROM card_quality
-      WHERE resolver_version=?
-        AND status='READY'
+      WHERE status='READY'
         AND media_url IS NOT NULL
         AND trim(media_url)<>''
         AND (
           taxon_id=?
           OR scientific_name=? COLLATE NOCASE
         )
-      ORDER BY CASE WHEN taxon_id=? THEN 0 ELSE 1 END
+      ORDER BY
+        CASE WHEN resolver_version=? THEN 0 ELSE 1 END,
+        CASE WHEN taxon_id=? THEN 0 ELSE 1 END
       LIMIT 1
     `).get(
+      id,
+      name,
       CURRENT_MEDIA_RESOLVER,
-      String(taxonId||""),
-      String(scientificName||""),
-      String(taxonId||"")
+      id
     );
     if(!row)return null;
 
@@ -223,11 +267,12 @@ export function getAuditedMedia(taxonId, scientificName = "") {
       imageUrl:row.media_url,
       originalUrl:row.wikipedia_url||row.media_url,
       source:row.media_source||"LifeCards audited media",
-      resolver:row.media_resolver||CURRENT_MEDIA_RESOLVER,
+      resolver:row.media_resolver||row.resolver_version||CURRENT_MEDIA_RESOLVER,
       confidence:row.media_confidence||null,
       creator:row.media_creator||null,
       license:row.media_license||null,
       audited:true,
+      migrationFallback:row.resolver_version!==CURRENT_MEDIA_RESOLVER,
       taxonId:String(row.taxon_id),
     };
   }catch{
