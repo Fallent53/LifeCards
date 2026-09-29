@@ -389,7 +389,7 @@ function renderProfile(){
       '<div class="profile-hero">'+
         '<div class="profile-avatar">E</div>'+
         '<div><span class="eyebrow">FIELD RESEARCHER</span><h1>Explorer</h1><p>Collector, taxonomist and keeper of a growing Tree of Life archive.</p></div>'+
-        ''<div class="profile-level"><small>KNOWLEDGE</small><b>'+formatNumber(p.knowledge.points)+'</b><span>'+p.knowledge.correctAnswers+' correct · '+Math.round(p.knowledge.accuracy*100)+'% accuracy · '+formatNumber(ui.state.audit?.count||0)+' audited packs</span></div>'+
+        '<div class="profile-level"><small>KNOWLEDGE</small><b>'+formatNumber(p.knowledge.points)+'</b><span>'+p.knowledge.correctAnswers+' correct · '+Math.round(p.knowledge.accuracy*100)+'% accuracy · '+formatNumber(ui.state.audit?.count||0)+' audited packs</span></div>'+
       '</div>'+
       '<div class="profile-stats">'+
         '<article><span>Total cards</span><b>'+formatNumber(p.totalCards)+'</b></article>'+
