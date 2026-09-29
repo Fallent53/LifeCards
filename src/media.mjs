@@ -1,3 +1,4 @@
+import { getExternalCache, setExternalCache } from "./database.mjs";
 const ACCEPTED_LICENSE_MARKERS = ["cc by", "cc-by", "cc0", "public domain", "pd-"];
 const memoryCache = new Map();
 
@@ -15,6 +16,12 @@ export async function searchCommonsImage(query) {
   const key = String(query || "").trim().toLowerCase();
   if (!key) return null;
   if (memoryCache.has(key)) return memoryCache.get(key);
+
+  const persisted = getExternalCache("commons-media", key);
+  if (persisted) {
+    memoryCache.set(key, persisted.value);
+    return persisted.value;
+  }
   const params = new URLSearchParams({
     action: "query",
     format: "json",
@@ -49,8 +56,10 @@ export async function searchCommonsImage(query) {
       source: "Wikimedia Commons",
     };
     memoryCache.set(key, result);
+    setExternalCache("commons-media", key, result, 30 * 24 * 60 * 60 * 1000);
     return result;
   }
   memoryCache.set(key, null);
+  setExternalCache("commons-media", key, null, 6 * 60 * 60 * 1000);
   return null;
 }
