@@ -52,16 +52,41 @@ function writePersistentCache(query, lang, value) {
   }
 }
 
-async function fetchJson(url, timeoutMs = 5000) {
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(timeoutMs),
-    headers: {
-      "Accept": "application/json",
-      "User-Agent": "LifeCards/0.1 (scientific card knowledge resolver)",
-    },
-  });
-  if (!response.ok) throw new Error(`Knowledge source returned ${response.status}`);
-  return response.json();
+async function fetchJson(url, timeoutMs = 5000, { retries = 2 } = {}) {
+  let lastError=null;
+
+  for(let attempt=0;attempt<=retries;attempt+=1){
+    try{
+      const response=await fetch(url,{
+        signal:AbortSignal.timeout(timeoutMs),
+        headers:{
+          "Accept":"application/json",
+          "User-Agent":"LifeCards/0.1 (scientific card knowledge resolver)",
+        },
+      });
+
+      if(response.ok)return response.json();
+
+      const error=new Error(`Knowledge source returned ${response.status}`);
+      error.status=response.status;
+      lastError=error;
+
+      if(![429,500,502,503,504].includes(response.status))throw error;
+
+      const retryAfter=Number(response.headers.get("retry-after"));
+      const delay=Number.isFinite(retryAfter)&&retryAfter>0
+        ?Math.min(10000,retryAfter*1000)
+        :700*(attempt+1);
+      if(attempt<retries)await new Promise((resolve)=>setTimeout(resolve,delay));
+    }catch(error){
+      lastError=error;
+      if(attempt<retries){
+        await new Promise((resolve)=>setTimeout(resolve,700*(attempt+1)));
+      }
+    }
+  }
+
+  throw lastError||new Error("Knowledge request failed");
 }
 
 function firstPage(query = {}) {
@@ -384,6 +409,7 @@ async function wikipediaPagesBatch(entries,{lang="en"}={}){
   const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
   const queries=[...new Set(entries.map((entry)=>String(entry.query||"").trim()).filter(Boolean))];
   const output=new Map();
+  const transientFailures=new Set();
 
   for(let offset=0;offset<queries.length;offset+=40){
     const chunk=queries.slice(offset,offset+40);
@@ -398,15 +424,20 @@ async function wikipediaPagesBatch(entries,{lang="en"}={}){
       pilicense:"free",
       pithumbsize:"1200",
       inprop:"url",
+      maxlag:"5",
     });
 
     let json=null;
     try{
-      json=await fetchJson(`https://${safeLang}.wikipedia.org/w/api.php?${params}`,10000);
+      json=await fetchJson(
+        `https://${safeLang}.wikipedia.org/w/api.php?${params}`,
+        12000,
+        {retries:3}
+      );
     }catch{
-      json=null;
+      for(const query of chunk)transientFailures.add(lowerKey(query));
+      continue;
     }
-    if(!json)continue;
 
     const aliases=new Map();
     for(const item of json?.query?.normalized??[]){
@@ -440,7 +471,7 @@ async function wikipediaPagesBatch(entries,{lang="en"}={}){
     }
   }
 
-  return output;
+  return {pages:output,transientFailures};
 }
 
 async function wikidataEntitiesBatch(qids,{lang="en"}={}){
@@ -459,7 +490,7 @@ async function wikidataEntitiesBatch(qids,{lang="en"}={}){
     });
 
     try{
-      const json=await fetchJson(`https://www.wikidata.org/w/api.php?${params}`,10000);
+      const json=await fetchJson(`https://www.wikidata.org/w/api.php?${params}`,12000,{retries:3});
       Object.assign(output,json?.entities??{});
     }catch{}
   }
@@ -480,7 +511,9 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   }
   if(!normalized.length)return {};
 
-  const pages=await wikipediaPagesBatch(normalized,{lang});
+  const pageBatch=await wikipediaPagesBatch(normalized,{lang});
+  const pages=pageBatch.pages;
+  const transientFailures=pageBatch.transientFailures;
   const qids=[...new Set(
     [...pages.values()].map((page)=>page?.pageprops?.wikibase_item).filter(Boolean)
   )];
@@ -509,6 +542,15 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   const fallback=[];
 
   for(const entry of normalized){
+    if(transientFailures.has(lowerKey(entry.query))){
+      output[entry.id]={
+        query:entry.query,
+        media:null,
+        auditTransientError:"wikipedia batch temporarily unavailable",
+        sourceStatus:{wikipedia:"transient-error",media:"unavailable"},
+      };
+      continue;
+    }
     const page=pages.get(lowerKey(entry.query))||null;
     const qid=page?.pageprops?.wikibase_item||null;
     const entity=qid?entities[qid]||null:null;
@@ -626,23 +668,18 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     }
   }
 
-  // Only unresolved taxa use the expensive per-item fallback chain.
-  let cursor=0;
-  async function fallbackWorker(){
-    while(cursor<fallback.length){
-      const entry=fallback[cursor++];
-      try{
-        output[entry.id]=await getKnowledge(entry.query,{lang});
-      }catch{
-        output[entry.id]=null;
-      }
-      await new Promise((resolve)=>setTimeout(resolve,90));
+  // Bulk audits deliberately cap expensive per-item fallbacks. Wikimedia
+  // batches are the scalable first pass; unresolved taxa can be retried later.
+  const fallbackBudget=Math.min(4,fallback.length);
+  for(let index=0;index<fallbackBudget;index+=1){
+    const entry=fallback[index];
+    try{
+      output[entry.id]=await getKnowledge(entry.query,{lang});
+    }catch{
+      output[entry.id]=null;
     }
+    await new Promise((resolve)=>setTimeout(resolve,350));
   }
-
-  await Promise.all(
-    Array.from({length:Math.min(2,fallback.length||1)},()=>fallbackWorker())
-  );
 
   return output;
 }
