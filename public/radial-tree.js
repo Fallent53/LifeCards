@@ -27,7 +27,9 @@ function flatten(root) {
 
 function calculateWeight(entry) {
   if (!entry.children.length) {
-    entry.weight = Math.max(1, Math.min(12, Number(entry.node.childCount || 1)));
+    const species = Number(entry.node.descendantSpeciesCount || 0);
+    const direct = Number(entry.node.childCount || 0);
+    entry.weight = Math.max(1, species || Math.min(24, direct || 1));
     return entry.weight;
   }
   entry.weight = entry.children.reduce((sum, child) => sum + calculateWeight(child), 0);
@@ -58,6 +60,15 @@ function branchPath(parent, child, ring) {
   const c2 = polar(child.angle, midRadius);
   return `M ${a.x.toFixed(2)} ${a.y.toFixed(2)} C ${c1.x.toFixed(2)} ${c1.y.toFixed(2)}, ${c2.x.toFixed(2)} ${c2.y.toFixed(2)}, ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
 }
+function cladeArcPath(entry, ring) {
+  if (!entry.depth || entry.endAngle - entry.startAngle < 0.012) return "";
+  const radius = entry.depth * ring;
+  const start = polar(entry.startAngle, radius);
+  const end = polar(entry.endAngle, radius);
+  const large = entry.endAngle - entry.startAngle > Math.PI ? 1 : 0;
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} A ${radius.toFixed(2)} ${radius.toFixed(2)} 0 ${large} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
+
 
 export class RadialTreeMap {
   constructor(container, options = {}) {
@@ -91,26 +102,35 @@ export class RadialTreeMap {
       return `<circle class="radial-ring" cx="0" cy="0" r="${radius}"></circle>`;
     }).join("");
 
+    const cladeArcs = nodes.filter((entry) => entry.depth > 0).map((entry) => {
+      const path = cladeArcPath(entry, ring);
+      if (!path) return "";
+      return `<path class="radial-clade-arc depth-${entry.depth}" d="${path}"></path>`;
+    }).join("");
+
     const edges = nodes.filter((entry) => entry.parent).map((entry) => {
       return `<path class="radial-edge depth-${entry.depth}" d="${branchPath(entry.parent, entry, ring)}"></path>`;
     }).join("");
 
     const nodeMarkup = nodes.map((entry) => {
       const p = polar(entry.angle, entry.depth * ring);
-      const major = entry.depth <= 1 || entry.node.childCount > 20;
-      const leaf = !entry.children.length && Number(entry.node.childCount || 0) === 0;
+      const speciesCount = Number(entry.node.descendantSpeciesCount || 0);
+      const directChildren = Number(entry.node.childCount || 0);
+      const major = entry.depth <= 1 || speciesCount >= 1000 || directChildren > 20;
+      const leaf = !entry.children.length && directChildren === 0;
       const label = entry.node.commonName || entry.node.canonicalName || entry.node.scientificName;
       const rank = entry.node.rank || entry.node.kind || "";
       const truncated = entry.node.truncatedChildren || entry.node.truncated || 0;
       const owned = Boolean(this.options.isOwned?.(entry.node));
+      const priority = major ? "high" : entry.depth <= 2 ? "medium" : "low";
       return `
-        <g class="radial-node ${major ? "major" : ""} ${leaf ? "leaf" : ""} ${owned ? "owned" : ""}"
+        <g class="radial-node priority-${priority} ${major ? "major" : ""} ${leaf ? "leaf" : ""} ${owned ? "owned" : ""}"
            data-radial-id="${escapeHtml(entry.node.id)}"
            transform="translate(${p.x.toFixed(2)} ${p.y.toFixed(2)})">
           <circle class="radial-node-halo" r="${major ? 17 : 11}"></circle>
           <circle class="radial-node-dot" r="${major ? 6 : 4}"></circle>
           <text class="radial-node-label" x="${p.x >= 0 ? 13 : -13}" y="-2" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(label)}</text>
-          <text class="radial-node-rank" x="${p.x >= 0 ? 13 : -13}" y="10" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(rank)}${visibleChildren ? ` · ${visibleChildren.toLocaleString()}↘` : ""}${truncated ? ` · +${truncated}` : ""}</text>
+          <text class="radial-node-rank" x="${p.x >= 0 ? 13 : -13}" y="10" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(rank)}${speciesCount ? ` · ${speciesCount.toLocaleString()} spp` : ""}${truncated ? ` · +${truncated}` : ""}</text>
         </g>`;
     }).join("");
 
@@ -122,7 +142,7 @@ export class RadialTreeMap {
         <div class="radial-map-title"><span>FOCUS</span><b>${rootLabel}</b><small>${escapeHtml(payload.root.rank || "")}</small></div>
         <div class="radial-map-actions">
           <button data-radial-action="up" title="Parent">↑</button>
-          <button data-radial-action="home" title="Animalia">◎</button>
+          <button data-radial-action="home" title="Origin / LUCA">◎</button>
           <button data-radial-action="out" title="Zoom out">−</button>
           <button data-radial-action="in" title="Zoom in">+</button>
           <button data-radial-action="reset" title="Reset view">⟲</button>
@@ -139,6 +159,7 @@ export class RadialTreeMap {
           <circle class="radial-aura" cx="0" cy="0" r="${ring * .85}"></circle>
           <g class="radial-viewport-group">
             <g class="radial-grid">${circles}</g>
+            <g class="radial-clades">${cladeArcs}</g>
             <g class="radial-edges">${edges}</g>
             <g class="radial-nodes">${nodeMarkup}</g>
             <g class="radial-center ${rootOwned ? "owned" : ""}" data-radial-id="${escapeHtml(payload.root.id)}">
@@ -180,7 +201,12 @@ export class RadialTreeMap {
         const id = element.dataset.radialId;
         const node = byId.get(String(id));
         if (!node || !this.tooltip) return;
-        this.tooltip.innerHTML = `<b>${escapeHtml(node.commonName || node.scientificName)}</b><em>${escapeHtml(node.scientificName)}</em><span>${escapeHtml(node.rank || "")} · ${Number(node.childCount || 0).toLocaleString()} direct children</span>`;
+        const speciesCount=Number(node.descendantSpeciesCount||0);
+        const directChildren=Number(node.childCount||0);
+        const scaleText=speciesCount
+          ? `${speciesCount.toLocaleString()} species · ${directChildren.toLocaleString()} direct branches`
+          : `${directChildren.toLocaleString()} direct branches`;
+        this.tooltip.innerHTML = `<b>${escapeHtml(node.commonName || node.scientificName)}</b><em>${escapeHtml(node.scientificName)}</em><span>${escapeHtml(node.rank || "")} · ${scaleText}</span>`;
         this.tooltip.classList.add("visible");
         this.moveTooltip(event);
       });
