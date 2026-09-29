@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v2-canonical-wikipedia";
+const AUDIT_RESOLVER_VERSION="v3-canonical-authorship-wikipedia";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -142,9 +142,15 @@ function totalDroppable(){
 
 function stats(){
   const total=totalDroppable();
-  const rows=quality.prepare(
-    "SELECT status,COUNT(*) AS count FROM card_quality GROUP BY status ORDER BY status"
-  ).all();
+  const rows=taxonomy.prepare(`
+    SELECT q.status AS status, COUNT(*) AS count
+    FROM drop_pool p
+    JOIN qualitydb.card_quality q ON q.taxon_id = p.taxon_id
+    WHERE q.resolver_version = ?
+    GROUP BY q.status
+    ORDER BY q.status
+  `).all(AUDIT_RESOLVER_VERSION);
+
   const byStatus=Object.fromEntries(rows.map(row=>[row.status,Number(row.count)]));
   const checked=Object.values(byStatus).reduce((a,b)=>a+b,0);
   return {
@@ -158,6 +164,10 @@ function stats(){
     error:byStatus.ERROR||0,
     complete:total>0&&checked>=total,
     byStatus,
+    resolverVersion:AUDIT_RESOLVER_VERSION,
+    taxonomyScope:taxonomyMeta("scope")||"unknown",
+    taxonomyDataset:taxonomyMeta("dataset_key")||"unknown",
+    taxonomyImportedAt:taxonomyMeta("imported_at")||null,
   };
 }
 
@@ -348,23 +358,34 @@ if(finalStats.complete){
       PRIMARY KEY(rarity,slot),
       UNIQUE(taxon_id)
     );
-    INSERT INTO ready_drop_pool(rarity,slot,taxon_id)
-    SELECT
-      rarity,
-      ROW_NUMBER() OVER (PARTITION BY rarity ORDER BY taxon_id),
-      taxon_id
-    FROM card_quality
-    WHERE status='READY';
-
     CREATE TABLE ready_drop_pool_stats(
       rarity TEXT PRIMARY KEY,
       card_count INTEGER NOT NULL
     );
-    INSERT INTO ready_drop_pool_stats(rarity,card_count)
-    SELECT rarity,COUNT(*)
-    FROM ready_drop_pool
-    GROUP BY rarity;
   `);
+
+  quality.prepare("ATTACH DATABASE ? AS taxdb").run(taxonomyPath);
+  try{
+    quality.prepare(`
+      INSERT INTO ready_drop_pool(rarity,slot,taxon_id)
+      SELECT
+        p.rarity,
+        ROW_NUMBER() OVER (PARTITION BY p.rarity ORDER BY p.taxon_id),
+        p.taxon_id
+      FROM taxdb.drop_pool p
+      JOIN card_quality q ON q.taxon_id = p.taxon_id
+      WHERE q.status='READY' AND q.resolver_version=?
+    `).run(AUDIT_RESOLVER_VERSION);
+
+    quality.exec(`
+      INSERT INTO ready_drop_pool_stats(rarity,card_count)
+      SELECT rarity,COUNT(*)
+      FROM ready_drop_pool
+      GROUP BY rarity;
+    `);
+  } finally {
+    quality.exec("DETACH DATABASE taxdb");
+  }
 }
 
 quality.prepare(
@@ -373,6 +394,18 @@ quality.prepare(
 quality.prepare(
   "INSERT OR REPLACE INTO meta(key,value) VALUES ('taxonomy_path',?)"
 ).run(taxonomyPath);
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('taxonomy_scope',?)"
+).run(String(finalStats.taxonomyScope||"unknown"));
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('taxonomy_dataset',?)"
+).run(String(finalStats.taxonomyDataset||"unknown"));
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('taxonomy_imported_at',?)"
+).run(String(finalStats.taxonomyImportedAt||""));
+quality.prepare(
+  "INSERT OR REPLACE INTO meta(key,value) VALUES ('resolver_version',?)"
+).run(AUDIT_RESOLVER_VERSION);
 quality.prepare(
   "INSERT OR REPLACE INTO meta(key,value) VALUES ('complete',?)"
 ).run(finalStats.complete?"1":"0");
