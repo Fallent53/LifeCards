@@ -49,6 +49,7 @@ function mapRow(row) {
     kind: String(row.rank || "").toLowerCase() === "species" ? "species" : "taxon",
     source: "Catalogue of Life",
     sourceId: String(row.id),
+    gameRarity: row.game_rarity || row.pool_rarity || null,
   };
 }
 
@@ -100,6 +101,12 @@ export function taxonomyStatus() {
       hint: "Run npm install && npm run sync:col to import Catalogue of Life Animalia.",
     };
   }
+  const dropPoolTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='drop_pool'").get();
+  const dropPoolStatsTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='drop_pool_stats'").get();
+  const dropPool = dropPoolStatsTable
+    ? Object.fromEntries(db.prepare("SELECT rarity, card_count FROM drop_pool_stats").all().map((row) => [row.rarity, Number(row.card_count)]))
+    : {};
+
   return {
     ready: true,
     mode: "catalogue-of-life",
@@ -113,6 +120,9 @@ export function taxonomyStatus() {
     release: metaValue(db, "release"),
     importedAt: metaValue(db, "imported_at"),
     source: "Catalogue of Life / ChecklistBank",
+    schemaVersion: metaValue(db, "schema_version") || "legacy",
+    dropPoolReady: Boolean(dropPoolTable),
+    dropPool,
   };
 }
 
@@ -124,6 +134,31 @@ export function getTaxon(id) {
     FROM taxa WHERE id = ?
   `).get(String(id));
   return mapRow(row);
+}
+
+
+export function pickDropTaxon(rarity, rng) {
+  const db = openFullDb();
+  if (!db) return null;
+
+  try {
+    const stat = db.prepare("SELECT card_count FROM drop_pool_stats WHERE rarity = ?").get(String(rarity));
+    const count = Number(stat?.card_count || 0);
+    if (!count) return null;
+
+    const slot = (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
+    const row = db.prepare(`
+      SELECT t.*, p.rarity AS pool_rarity
+      FROM drop_pool p
+      JOIN taxa t ON t.id = p.taxon_id
+      WHERE p.rarity = ? AND p.slot = ?
+      LIMIT 1
+    `).get(String(rarity), slot);
+
+    return mapRow(row);
+  } catch {
+    return null;
+  }
 }
 
 function ftsQuery(query) {
