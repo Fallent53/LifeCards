@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies } from "./src/database.mjs";
+import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -160,6 +160,11 @@ async function api(request, response, url) {
     if (request.method === "POST" && url.pathname === "/api/market/buy") {
       const input = await bodyJson(request);
       const result = buyListing(uid, String(input.listingId || ""));
+      return json(response, 200, result);
+    }
+    if (request.method === "POST" && url.pathname === "/api/market/cancel") {
+      const input = await bodyJson(request);
+      const result = cancelListing(uid, String(input.listingId || ""));
       return json(response, 200, result);
     }
     if (request.method === "GET" && url.pathname === "/api/supplies") {
