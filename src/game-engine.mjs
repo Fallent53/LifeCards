@@ -70,11 +70,13 @@ export function rollOrigin(rng = cryptoRng(), denominator = DEFAULT_CONFIG.lucaD
   return rng.int(denominator) === 0;
 }
 
-export function generatePackBlueprint({ rng = cryptoRng(), config = DEFAULT_CONFIG, definitions } = {}) {
+export function generatePackBlueprint({ rng = cryptoRng(), config = DEFAULT_CONFIG, definitions, definitionSelector } = {}) {
   const cards = [];
   for (let i = 0; i < config.cardsPerPack; i += 1) {
     const rarity = rollRarity(rng);
-    const definition = selectDefinition(rarity, rng, definitions ?? getDroppableDefinitions());
+    const external = definitionSelector ? definitionSelector(rarity, rng) : null;
+    const definition = external || selectDefinition(rarity, rng, definitions ?? getDroppableDefinitions());
+    if (!definition) throw new Error(`No card definition available for rarity ${rarity}`);
     cards.push({ definitionId: definition.id, finish: rollFinish(rng, config.holoRate) });
   }
   return {
