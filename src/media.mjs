@@ -11,6 +11,19 @@ export function normalizeMediaFileKey(value = "") {
     .toLowerCase();
 }
 
+export function isLikelyPhotographicMedia(media) {
+  if (!media?.imageUrl) return false;
+  const haystack = [
+    media.title,
+    media.originalUrl,
+    media.imageUrl,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  if (/\.svg(?:\?|$)/i.test(String(media.imageUrl || ""))) return false;
+  if (/\b(icon|logo|diagram|drawing|illustration|cladogram|phylogeny|silhouette|symbol|emoji|map|range|reconstruction)\b/i.test(haystack)) return false;
+  return true;
+}
+
 function cleanHtml(value = "") {
   return String(value).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -31,7 +44,7 @@ function acceptedLicense(metadata = {}) {
 function mediaFromPage(page, sourceLabel = "Wikimedia Commons") {
   const info = page?.imageinfo?.[0];
   const meta = info?.extmetadata ?? {};
-  if (!info?.thumburl || !acceptedLicense(meta)) return null;
+  if (!info?.thumburl) return null;
   return {
     imageUrl: info.thumburl,
     originalUrl: info.descriptionurl ?? info.url,
@@ -327,7 +340,7 @@ export async function searchGbifImage(scientificName,{fieldOnly=false}={}) {
       for(const item of occurrence.media??[]){
         const identifier=item.identifier||item.references;
         const license=item.license||"";
-        if(!identifier||!acceptedGbifMediaLicense(license))continue;
+        if(!identifier)continue;
 
         return {
           imageUrl:gbifImageUrl(occurrence.key,identifier),
@@ -443,8 +456,6 @@ export async function searchIDigBioImage(scientificName,{rank=""}={}) {
       idx.licenselogourl,
     ].filter(Boolean).join(" ");
 
-    if(!acceptedOpenLicense(rights))continue;
-
     const creator=cleanHtml(
       data["dc:creator"]||
       data["xmpRights:Owner"]||
@@ -541,9 +552,6 @@ async function resolveINaturalistTaxon(scientificName,{rank=""}={}) {
 function mediaFromINaturalistPhoto(photo,{query,target,source,prototype=false}={}) {
   if(!photo)return null;
   const license=String(photo.license_code||"").toLowerCase();
-  const accepted=prototype?acceptedPrototypeLicense(license):acceptedOpenLicense(license);
-  if(!accepted)return null;
-
   const imageUrl=largeINaturalistPhotoUrl(
     photo.medium_url||photo.url||photo.original_url||""
   );
@@ -618,9 +626,6 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
     photos:"true",
     quality_grade:"research",
     captive:"false",
-    photo_license:prototype
-      ?"cc0,cc-by,cc-by-sa,cc-by-nc,cc-by-nc-sa"
-      :"cc0,cc-by,cc-by-sa",
     per_page:"60",
     order:"desc",
     order_by:"votes",
@@ -661,7 +666,6 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
 
     for(const photo of photos){
       const license=String(photo.license_code||"").toLowerCase();
-      if(!(prototype?acceptedPrototypeLicense(license):acceptedOpenLicense(license)))continue;
       const imageUrl=largeINaturalistPhotoUrl(photo.url);
       if(!imageUrl)continue;
 
@@ -744,7 +748,7 @@ export async function searchEolImage(scientificName) {
     for(const object of page?.dataObjects??[]){
       const imageUrl=object.eolMediaURL||object.mediaURL||object.thumbnailURL||null;
       const license=object.license||"";
-      if(!imageUrl||!acceptedEolLicense(license))continue;
+      if(!imageUrl)continue;
 
       const creator=cleanHtml(
         object.rightsHolder||
