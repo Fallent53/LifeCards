@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance, getAuditHead, getPackAuditForUser } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
-import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
+import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree, getRepresentativeMediaQueries } from "./src/taxonomy-store.mjs";
 import { remoteSearchTaxa, remoteGetTaxon, remoteGetChildren, remoteGetPath, remoteGetSubtree, remoteStatusHint } from "./src/checklistbank.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -207,12 +207,20 @@ async function api(request, response, url) {
       const query = url.searchParams.get("q") || "";
       const lang = (url.searchParams.get("lang") || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
       const knowledge = await getKnowledge(query, { lang });
-      return publicJson(response, { knowledge }, 86400);
+      return json(response, 200, { knowledge });
     }
     if (request.method === "POST" && url.pathname === "/api/knowledge/batch") {
       const input = await bodyJson(request);
       const lang = String(input.lang || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
-      const entries = Array.isArray(input.entries) ? input.entries.slice(0, 24) : [];
+      const entries = (Array.isArray(input.entries) ? input.entries.slice(0, 24) : [])
+        .map((entry)=>({
+          ...entry,
+          fallbackQueries:getRepresentativeMediaQueries(
+            entry?.id,
+            entry?.scientificName||entry?.query||"",
+            4
+          ),
+        }));
       const knowledge = await getKnowledgeBatch(entries, { lang, concurrency: 4 });
       return json(response, 200, { knowledge });
     }
