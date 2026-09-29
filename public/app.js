@@ -712,6 +712,12 @@ function renderCardModal(definition,card){
     ? live.sources.join(" · ")
     : (knowledge===false?"External scientific sources unavailable — local card data shown.":"Wikipedia / Wikidata / Lifemap resolving…");
   const taxId=live?.taxonomy?.ncbiTaxId||null;
+  const displayName=(definition.commonName&&definition.commonName!==definition.scientificName)
+    ? definition.commonName
+    : (live?.wikipedia?.title||definition.commonName||definition.scientificName);
+  const colUrl=definition.source&&String(definition.source).includes("Catalogue of Life")
+    ? "https://www.catalogueoflife.org/data/taxon/"+encodeURIComponent(definition.taxonomyId||definition.id)
+    : null;
   const currentEdition=card?.edition||(
     definition.kind==="taxon"?"FOUNDATION I":
     definition.temporalStatus==="extinct"?"FOSSIL RECORD I":
@@ -724,7 +730,7 @@ function renderCardModal(definition,card){
       '<div class="detail-card">'+(card?cardHtml(card,{interactive:false}):definitionPreview(definition))+'</div>'+
       '<div class="detail-copy">'+
         '<span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span>'+
-        '<h2>'+esc(definition.commonName)+'</h2>'+
+        '<h2>'+esc(displayName)+'</h2>'+
         '<em>'+esc(definition.scientificName)+'</em>'+
         '<p class="knowledge-extract">'+esc(summary)+'</p>'+
         '<dl>'+
@@ -736,7 +742,10 @@ function renderCardModal(definition,card){
           (live?.wikidata?.id?'<div><dt>Wikidata</dt><dd>'+esc(live.wikidata.id)+'</dd></div>':"")+
           (supply?'<div><dt>Issued supply</dt><dd>'+formatNumber(supply.issued)+(card?.serialCap?" / "+formatNumber(card.serialCap):"")+'</dd></div>':"")+
         '</dl>'+
-        '<div class="source-actions">'+knowledgeSourceButtons(live)+'</div>'+
+        '<div class="source-actions">'+
+          (colUrl?'<a class="source-button col" href="'+esc(colUrl)+'" target="_blank" rel="noopener">Catalogue of Life ↗</a>':"")+
+          knowledgeSourceButtons(live)+
+        '</div>'+
         '<div class="source-meta"><span>'+esc(sourceLine)+'</span>'+
           (media&&media.creator?'<small>Image: '+esc(media.creator)+' · '+esc(media.license||"")+'</small>':"")+
         '</div>'+
