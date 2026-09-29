@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState, createKnowledgeQuestion, answerKnowledgeQuestion, createAuction, placeAuctionBid } from "./src/database.mjs";
+import { claimPack, createListing, buyListing, cancelListing, getState, createKnowledgeQuestion, answerKnowledgeQuestion, createAuction, placeAuctionBid, cancelAuction } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getScientificEnrichment } from "./src/science.mjs";
 import { byId } from "./src/catalog.mjs";
@@ -121,6 +121,18 @@ async function api(request, response, url) {
       const input = await bodyJson(request);
       const auction = placeAuctionBid(uid, String(input.auctionId || ""), Number(input.amount));
       return json(response, 200, { auction });
+    }
+    if (request.method === "POST" && url.pathname === "/api/market/cancel-listing") {
+      const input = await bodyJson(request);
+      return json(response, 200, {
+        listing: cancelListing(uid, String(input.listingId || "")),
+      });
+    }
+    if (request.method === "POST" && url.pathname === "/api/market/cancel-auction") {
+      const input = await bodyJson(request);
+      return json(response, 200, {
+        auction: cancelAuction(uid, String(input.auctionId || "")),
+      });
     }
     return json(response, 404, { error: "Not found" });
   } catch (error) {
