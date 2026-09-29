@@ -1350,3 +1350,162 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .reveal-summary-grid{grid-template-columns:1fr}
   .reveal-summary-card{grid-template-columns:82px minmax(0,1fr)}
 }
+
+
+/* ===== Scalable secondary market ===== */
+.scalable-market{max-width:1540px;margin:0 auto}
+.market-hero{
+  display:flex;
+  align-items:flex-end;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:24px;
+}
+.market-hero>div:first-child{max-width:760px}
+.market-hero h1{
+  margin:7px 0 8px;
+  font-family:"DM Serif Display",serif;
+  font-size:clamp(50px,5vw,76px);
+  font-weight:400;
+  line-height:.95;
+}
+.market-hero p{margin:0;color:#82968a;font-size:11px;line-height:1.6}
+.market-stat{
+  min-width:140px;
+  padding:14px 16px;
+  border:1px solid #284535;
+  border-radius:14px;
+  background:#0a1710;
+  text-align:right;
+}
+.market-stat b{
+  display:block;
+  font-family:"DM Serif Display",serif;
+  font-size:28px;
+  font-weight:400;
+}
+.market-stat small{
+  display:block;
+  margin-top:2px;
+  color:#617769;
+  font-size:7px;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+.market-search-row{
+  display:grid;
+  grid-template-columns:minmax(320px,1fr) auto;
+  gap:10px;
+  margin-bottom:9px;
+}
+.market-sort{
+  display:flex;
+  gap:4px;
+  padding:4px;
+  border:1px solid #223b2f;
+  border-radius:11px;
+  background:#08130e;
+}
+.market-sort button{
+  border:0;
+  border-radius:8px;
+  background:transparent;
+  color:#718579;
+  padding:8px 11px;
+  font-size:8px;
+}
+.market-sort button.active{background:#173425;color:#e7fff0}
+.market-toolbar{
+  min-height:38px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:7px 1px 13px;
+  border-bottom:1px solid #1c3025;
+  margin-bottom:18px;
+}
+.market-toolbar>span{color:#6e8477;font-size:8px}
+.market-toolbar>div{display:flex;gap:5px;flex-wrap:wrap}
+.market-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+  gap:24px 18px;
+}
+.market-grid.is-loading{opacity:.65}
+.market-item{
+  min-width:0;
+  padding:8px;
+  border:1px solid transparent;
+  border-radius:20px;
+  background:linear-gradient(180deg,rgba(14,32,23,.48),rgba(7,17,12,.2));
+  transition:border-color .15s ease,transform .15s ease,background .15s ease;
+}
+.market-item:hover{
+  transform:translateY(-3px);
+  border-color:#284a37;
+  background:linear-gradient(180deg,rgba(18,42,29,.62),rgba(7,17,12,.28));
+}
+.market-item .life-card{width:100%}
+.market-meta{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:9px;
+  margin-top:9px;
+  padding:10px 9px 3px;
+  border-top:1px solid #1e3428;
+}
+.market-meta>div{min-width:0}
+.market-meta small{
+  display:block;
+  color:#557061;
+  font-size:6px;
+  letter-spacing:.1em;
+}
+.market-meta strong{
+  display:block;
+  margin-top:1px;
+  font-family:"DM Serif Display",serif;
+  font-size:18px;
+  font-weight:400;
+}
+.market-meta span{
+  display:block;
+  max-width:150px;
+  margin-top:2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:#61786a;
+  font-size:6px;
+}
+.market-meta button{
+  min-width:58px;
+  border:1px solid #477558;
+  border-radius:9px;
+  padding:8px 10px;
+  background:#143420;
+  color:#d9f9e4;
+  font-size:8px;
+  font-weight:700;
+}
+.market-meta button:hover{background:#1c482d;border-color:#62a176}
+.market-card-skeleton{
+  aspect-ratio:5/7.8;
+  border:1px solid #1f382a;
+  border-radius:20px;
+  background:linear-gradient(110deg,#0d1d15 25%,#173226 38%,#0d1d15 52%);
+  background-size:260% 100%;
+  animation:artShimmer 1.3s linear infinite;
+}
+.market-pagination{margin-top:30px}
+@media(max-width:800px){
+  .market-hero{align-items:flex-start;flex-direction:column}
+  .market-stat{text-align:left}
+  .market-search-row{grid-template-columns:1fr}
+  .market-toolbar{align-items:flex-start;flex-direction:column}
+  .market-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 7px}
+  .market-item{padding:4px;border-radius:15px}
+  .market-meta{padding:8px 5px 2px}
+}
