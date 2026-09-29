@@ -67,14 +67,16 @@ Card detail views resolve Wikipedia summaries, Wikidata entity IDs and NCBI Taxo
 
 ## Full Catalogue of Life taxonomy
 
-LifeCards can use a local Catalogue of Life database instead of shipping millions of taxa in Git.
+LifeCards uses the public Catalogue of Life / ChecklistBank API as a live taxonomy fallback, so Tree search and Codex search can reach the large catalogue without committing millions of records to Git.
+
+For a fast, reproducible and offline scientific snapshot, build the local Animalia database:
 
 ```bash
 npm install
 npm run sync:col
 ```
 
-This downloads the pinned Catalogue of Life Extended Release from ChecklistBank, keeps accepted **Animalia** taxa, imports the hierarchy into `data/animalia.sqlite`, adds direct-child counts, and imports preferred vernacular names when the DwCA release provides them.
+This downloads a pinned Catalogue of Life Extended Release from ChecklistBank, keeps accepted **Animalia** taxa, imports the hierarchy into `data/animalia.sqlite`, adds direct-child counts, and imports preferred vernacular names when the DwCA release provides them.
 
 After the import, restart LifeCards:
 
@@ -82,7 +84,7 @@ After the import, restart LifeCards:
 npm start
 ```
 
-The Tree of Life and Codex automatically switch from the small seed catalog to the local CoL database. The UI never tries to render millions of nodes simultaneously: it loads a bounded radial subtree around the branch being explored.
+The Tree of Life and Codex automatically prefer the local CoL database when present; otherwise they use ChecklistBank live, and only fall back to the tiny seed catalog if the external service is unavailable. The UI never tries to render millions of nodes simultaneously: it loads a bounded radial subtree around the branch being explored.
 
 To import the entire Catalogue of Life instead of only Animalia:
 
