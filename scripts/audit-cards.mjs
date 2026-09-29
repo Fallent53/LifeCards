@@ -250,14 +250,16 @@ const rows=taxonomy.prepare(`
     WHERE resolver_version = ? AND status <> 'ERROR'
   )
   ORDER BY
-    CASE p.rarity
-      WHEN 'MYTHIC' THEN 1
-      WHEN 'LEGENDARY' THEN 2
-      WHEN 'ULTRA_RARE' THEN 3
-      WHEN 'SUPER_RARE' THEN 4
-      WHEN 'RARE' THEN 5
-      WHEN 'UNCOMMON' THEN 6
-      ELSE 7
+    CASE lower(t.rank)
+      WHEN 'species' THEN 1
+      WHEN 'genus' THEN 2
+      WHEN 'family' THEN 3
+      WHEN 'order' THEN 4
+      WHEN 'class' THEN 5
+      WHEN 'phylum' THEN 6
+      WHEN 'kingdom' THEN 7
+      WHEN 'domain' THEN 8
+      ELSE 9
     END,
     p.slot
   LIMIT ?
@@ -413,45 +415,46 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
 
 const finalStats=stats();
 
-if(finalStats.complete){
+quality.exec(`
+  DROP TABLE IF EXISTS ready_drop_pool;
+  DROP TABLE IF EXISTS ready_drop_pool_stats;
+  CREATE TABLE ready_drop_pool(
+    rarity TEXT NOT NULL,
+    slot INTEGER NOT NULL,
+    taxon_id TEXT NOT NULL,
+    PRIMARY KEY(rarity,slot),
+    UNIQUE(taxon_id)
+  );
+  CREATE TABLE ready_drop_pool_stats(
+    rarity TEXT PRIMARY KEY,
+    card_count INTEGER NOT NULL
+  );
+`);
+
+quality.prepare("ATTACH DATABASE ? AS taxdb").run(taxonomyPath);
+try{
+  quality.prepare(`
+    INSERT INTO ready_drop_pool(rarity,slot,taxon_id)
+    SELECT
+      p.rarity,
+      ROW_NUMBER() OVER (PARTITION BY p.rarity ORDER BY p.taxon_id),
+      p.taxon_id
+    FROM taxdb.drop_pool p
+    JOIN card_quality q ON q.taxon_id = p.taxon_id
+    WHERE q.status='READY'
+      AND q.resolver_version=?
+      AND q.media_url IS NOT NULL
+      AND trim(q.media_url)<>''
+  `).run(AUDIT_RESOLVER_VERSION);
+
   quality.exec(`
-    DROP TABLE IF EXISTS ready_drop_pool;
-    DROP TABLE IF EXISTS ready_drop_pool_stats;
-    CREATE TABLE ready_drop_pool(
-      rarity TEXT NOT NULL,
-      slot INTEGER NOT NULL,
-      taxon_id TEXT NOT NULL,
-      PRIMARY KEY(rarity,slot),
-      UNIQUE(taxon_id)
-    );
-    CREATE TABLE ready_drop_pool_stats(
-      rarity TEXT PRIMARY KEY,
-      card_count INTEGER NOT NULL
-    );
+    INSERT INTO ready_drop_pool_stats(rarity,card_count)
+    SELECT rarity,COUNT(*)
+    FROM ready_drop_pool
+    GROUP BY rarity;
   `);
-
-  quality.prepare("ATTACH DATABASE ? AS taxdb").run(taxonomyPath);
-  try{
-    quality.prepare(`
-      INSERT INTO ready_drop_pool(rarity,slot,taxon_id)
-      SELECT
-        p.rarity,
-        ROW_NUMBER() OVER (PARTITION BY p.rarity ORDER BY p.taxon_id),
-        p.taxon_id
-      FROM taxdb.drop_pool p
-      JOIN card_quality q ON q.taxon_id = p.taxon_id
-      WHERE q.status='READY' AND q.resolver_version=?
-    `).run(AUDIT_RESOLVER_VERSION);
-
-    quality.exec(`
-      INSERT INTO ready_drop_pool_stats(rarity,card_count)
-      SELECT rarity,COUNT(*)
-      FROM ready_drop_pool
-      GROUP BY rarity;
-    `);
-  } finally {
-    quality.exec("DETACH DATABASE taxdb");
-  }
+} finally {
+  quality.exec("DETACH DATABASE taxdb");
 }
 
 quality.prepare(
