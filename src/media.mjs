@@ -86,6 +86,19 @@ async function commonsQuery(params) {
   );
 }
 
+async function fetchJsonFast(url, timeoutMs = 2600) {
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { "User-Agent": "LifeCards/0.1 (fast prototype media resolver)" },
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
 async function wikipediaFileQuery(lang, params) {
   const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
   return fetchJsonWithRetry(
@@ -156,6 +169,103 @@ export async function getCommonsFileMetadata(fileName) {
   const page = Object.values(json?.query?.pages ?? {})[0] ?? null;
   const result = mediaFromPage(page);
   memoryCache.set(key, result);
+  return result;
+}
+
+export async function searchCommonsImageFast(query) {
+  const normalized=String(query||"").trim();
+  if(!normalized)return null;
+
+  const key=`search-fast:${normalized.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const params=new URLSearchParams({
+    action:"query",
+    format:"json",
+    origin:"*",
+    generator:"search",
+    gsrsearch:normalized,
+    gsrnamespace:"6",
+    gsrlimit:"4",
+    prop:"imageinfo",
+    iiprop:"url",
+    iiurlwidth:"1000",
+  });
+
+  const json=await fetchJsonFast(
+    `https://commons.wikimedia.org/w/api.php?${params}`,
+    2600
+  );
+
+  for(const page of Object.values(json?.query?.pages??{})){
+    const info=page?.imageinfo?.[0];
+    if(!info?.thumburl)continue;
+    const result={
+      imageUrl:info.thumburl,
+      originalUrl:info.descriptionurl||info.url||info.thumburl,
+      title:page.title||normalized,
+      creator:null,
+      license:null,
+      attribution:null,
+      source:"Wikimedia Commons",
+      mediaMatch:"BROAD_QUERY_FAST",
+    };
+    memoryCache.set(key,result);
+    return result;
+  }
+
+  memoryCache.set(key,null);
+  return null;
+}
+
+export async function searchINaturalistPhotoFast(scientificName) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+
+  const key=`inat-fast:${comparableScientificName(query)}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const params=new URLSearchParams({q:query,per_page:"8"});
+  const json=await fetchJsonFast(
+    `https://api.inaturalist.org/v1/taxa/autocomplete?${params}`,
+    2600
+  );
+
+  const wanted=comparableScientificName(query);
+  const candidates=json?.results??[];
+  const target=
+    candidates.find((item)=>comparableScientificName(item?.name||"")===wanted) ||
+    candidates.find((item)=>comparableScientificName(item?.matched_term||"")===wanted) ||
+    candidates[0] ||
+    null;
+
+  const photo=target?.default_photo||null;
+  const imageUrl=largeINaturalistPhotoUrl(
+    photo?.medium_url||photo?.url||photo?.original_url||""
+  );
+  if(!imageUrl){
+    memoryCache.set(key,null);
+    return null;
+  }
+
+  const result={
+    imageUrl,
+    originalUrl:
+      photo?.original_url||
+      photo?.url||
+      (target?.id?`https://www.inaturalist.org/taxa/${target.id}`:imageUrl),
+    title:target?.name||query,
+    creator:cleanHtml(photo?.attribution||""),
+    license:String(photo?.license_code||"").toUpperCase()||null,
+    attribution:cleanHtml(photo?.attribution||""),
+    source:"iNaturalist taxon photo",
+    inaturalistTaxonId:target?.id||null,
+    mediaMatch:
+      comparableScientificName(target?.name||"")===wanted
+        ?"EXACT_TAXON_FAST"
+        :"BROAD_TAXON_FAST",
+  };
+  memoryCache.set(key,result);
   return result;
 }
 
