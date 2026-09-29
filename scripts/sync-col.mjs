@@ -26,6 +26,7 @@ const archivePath = resolve(args.get("archive") || `./data/col-${datasetKey}-dwc
 const keepArchive = args.get("keep-archive") !== "false" && process.env.COL_KEEP_ARCHIVE !== "0";
 const refreshArchive = args.get("refresh") === "true" || process.env.COL_REFRESH === "1";
 const customUrl = args.get("url") || process.env.COL_DWCA_URL;
+const mapOnly = args.get("map-only") === "true" || process.env.COL_MAP_ONLY === "1";
 const sourceUrl = customUrl || (
   datasetKey === "latest-base"
     ? "https://download.checklistbank.org/col/latest_dwca.zip"
@@ -203,8 +204,8 @@ try {
     const extinct = boolExtinct(pick(row, "extinct"));
     const kingdom = pick(row, "kingdom");
     const sourceDataset = pick(row, "datasetid", "sourceid");
-    const rarity = gameRarity(scientificName, canonicalName, rank);
-    const dropEligible = rarity ? 1 : 0;
+    const rarity = mapOnly ? null : gameRarity(scientificName, canonicalName, rank);
+    const dropEligible = !mapOnly && rarity ? 1 : 0;
 
     if (!id || !scientificName) continue;
 
@@ -298,6 +299,7 @@ db.exec(`
   SET child_count = COALESCE((SELECT c FROM child_counts WHERE child_counts.id = taxa.id), 0);
   DROP TABLE child_counts;
 
+  ${mapOnly ? "" : `
   CREATE TABLE drop_pool (
     rarity TEXT NOT NULL,
     slot INTEGER NOT NULL,
@@ -322,6 +324,7 @@ db.exec(`
   GROUP BY rarity;
 
   CREATE INDEX drop_pool_taxon_idx ON drop_pool(taxon_id);
+  ` : ""}
 `);
 
 console.log("Calculating descendant species counts for radial map weighting…");
@@ -383,6 +386,7 @@ for (const [key, value] of Object.entries({
   scanned_rows: String(seen),
   root_id: String(rootId || ""),
   schema_version: "4",
+  map_only: mapOnly ? "1" : "0",
 })) setMeta.run(key, value);
 
 db.exec("PRAGMA optimize;");
@@ -397,3 +401,4 @@ console.log(`Accepted taxa: ${accepted.toLocaleString()}`);
 console.log(`Species: ${species.toLocaleString()}`);
 console.log(`Database: ${outputPath}`);
 console.log(`Root taxon id: ${rootId}`);
+console.log(`Mode: ${mapOnly ? "map-only taxonomy" : "gameplay taxonomy + drop pools"}`);
