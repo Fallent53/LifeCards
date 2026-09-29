@@ -14,7 +14,10 @@
     "sync:col:all": "npm run sync:map",
     "prefetch:cards": "node scripts/prefetch-cards.mjs",
     "prefetch:catalog": "node scripts/prefetch-cards.mjs --catalog",
-    "sync:map": "node scripts/sync-col.mjs --scope all --output ./data/life.sqlite --map-only true"
+    "sync:map": "node scripts/sync-col.mjs --scope all --output ./data/life.sqlite --map-only true",
+    "audit:cards": "node scripts/audit-cards.mjs",
+    "audit:cards:status": "node scripts/audit-cards.mjs --status",
+    "audit:cards:full": "node scripts/audit-cards.mjs --all"
   },
   "engines": {
     "node": ">=22.5.0"
