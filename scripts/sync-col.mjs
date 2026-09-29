@@ -157,33 +157,48 @@ const EUKARYOTE_KINGDOMS = new Set([
   "protista",
 ]);
 
-const NON_EUKARYOTE_KINGDOMS = new Set([
-  "bacteria",
-  "archaea",
-  "virus",
-  "viruses",
-  "viridae",
-  "viroids",
-]);
-
 function inScope(row) {
   const wanted = scope.toLowerCase().trim();
   if (wanted === "all") return true;
 
-  const kingdom = pick(row, "kingdom").toLowerCase();
-  const scientific = pick(row, "scientificname", "canonicalname").toLowerCase();
+  const kingdom = pick(row, "kingdom").toLowerCase().trim();
+  const scientific = pick(row, "scientificname", "canonicalname").toLowerCase().trim();
 
   if (wanted === "eukaryota") {
-    if (scientific === "eukaryota") return true;
-    if (EUKARYOTE_KINGDOMS.has(kingdom)) return true;
-
-    // Future-proofing for new/less common eukaryotic kingdoms in CoL:
-    // include classified kingdoms unless they are explicitly prokaryotic/viral.
-    if (kingdom && !NON_EUKARYOTE_KINGDOMS.has(kingdom)) return true;
-    return false;
+    // CoL Base Release does not consistently expose an Eukaryota domain row,
+    // but it does classify eukaryotic records under these kingdoms.
+    return scientific === "eukaryota" || EUKARYOTE_KINGDOMS.has(kingdom) || EUKARYOTE_KINGDOMS.has(scientific);
   }
 
   return kingdom === wanted || scientific === wanted;
+}
+
+function cleanCanonicalName(row, scientificName, authorship) {
+  const generic = pick(row, "genericname");
+  const specific = pick(row, "specificepithet");
+  const infra = pick(row, "infraspecificepithet");
+
+  if (generic && specific) {
+    return [generic, specific, infra].filter(Boolean).join(" ").trim();
+  }
+
+  let candidate = pick(row, "canonicalname") || scientificName;
+  const author = String(authorship || "").trim();
+
+  if (author && candidate.toLowerCase().endsWith(author.toLowerCase())) {
+    candidate = candidate.slice(0, candidate.length - author.length).trim();
+  }
+
+  // Some CoL rows duplicate the authority inside canonicalName.
+  // For uninomial higher taxa, preserve only the taxon name when the tail
+  // clearly looks like an authority/year string.
+  const rank = pick(row, "taxonrank", "rank").toLowerCase();
+  if (candidate && !["species","subspecies","variety","form"].includes(rank)) {
+    const match = candidate.match(/^([^\s(),]+)(?:\s+[A-ZÀ-ÖØ-Þ][^,]*(?:,|\s)\s*\d{4}.*)$/u);
+    if (match) candidate = match[1];
+  }
+
+  return candidate || scientificName;
 }
 
 function boolExtinct(value) {
@@ -347,8 +362,8 @@ try {
     const id = pick(row, "taxonid", "nameusageid", "id");
     const parentId = pick(row, "parentnameusageid", "parentid") || null;
     const scientificName = pick(row, "scientificname", "canonicalname");
-    const canonicalName = pick(row, "canonicalname") || scientificName;
     const authorship = pick(row, "scientificnameauthorship", "authorship");
+    const canonicalName = cleanCanonicalName(row, scientificName, authorship);
     const rank = pick(row, "taxonrank", "rank").toLowerCase();
     const status = pick(row, "taxonomicstatus", "status") || "accepted";
     const extinct = boolExtinct(pick(row, "extinct"));
@@ -422,6 +437,48 @@ try {
 } catch (error) {
   try { db.exec("ROLLBACK"); } catch {}
   console.warn(`Vernacular-name import skipped: ${error.message}`);
+}
+
+if (scope.toLowerCase() === "eukaryota") {
+  const syntheticRootId = "lifecards:eukaryota";
+  db.prepare(`
+    INSERT OR REPLACE INTO taxa(
+      id,parent_id,scientific_name,canonical_name,common_name,common_name_priority,
+      authorship,rank,status,extinct,kingdom,source_dataset,game_rarity,drop_eligible,
+      child_count,descendant_species_count
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0)
+  `).run(
+    syntheticRootId,
+    null,
+    "Eukaryota",
+    "Eukaryota",
+    "Eukaryotes",
+    10,
+    "",
+    "domain",
+    "synthetic-backbone",
+    0,
+    "",
+    "LifeCards universal backbone",
+    mapOnly ? null : "MYTHIC",
+    mapOnly ? 0 : 1
+  );
+
+  // Preserve all internal CoL relationships. Only top-level records whose
+  // parent is outside the scoped database are attached to the synthetic domain.
+  db.prepare(`
+    UPDATE taxa
+    SET parent_id = ?
+    WHERE id <> ?
+      AND (
+        parent_id IS NULL
+        OR parent_id = ''
+        OR NOT EXISTS (SELECT 1 FROM taxa parent WHERE parent.id = taxa.parent_id)
+      )
+  `).run(syntheticRootId, syntheticRootId);
+
+  rootId = syntheticRootId;
+  accepted += 1;
 }
 
 console.log("Building indexes and child counts…");
@@ -537,7 +594,7 @@ for (const [key, value] of Object.entries({
   species_count: String(species),
   scanned_rows: String(seen),
   root_id: String(rootId || ""),
-  schema_version: "4",
+  schema_version: "5",
   map_only: mapOnly ? "1" : "0",
 })) setMeta.run(key, value);
 
