@@ -47,7 +47,7 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS cards_owner_idx ON cards(owner_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS listings (
       id TEXT PRIMARY KEY,
-      card_id TEXT NOT NULL UNIQUE,
+      card_id TEXT NOT NULL,
       seller_id TEXT NOT NULL,
       price INTEGER NOT NULL CHECK(price > 0),
       status TEXT NOT NULL DEFAULT 'ACTIVE',
@@ -59,6 +59,35 @@ export function migrate() {
       FOREIGN KEY(buyer_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS listings_one_active_per_card
+      ON listings(card_id) WHERE status = 'ACTIVE';
+    CREATE TABLE IF NOT EXISTS auctions (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL,
+      seller_id TEXT NOT NULL,
+      starting_price INTEGER NOT NULL CHECK(starting_price > 0),
+      highest_bid INTEGER,
+      highest_bidder_id TEXT,
+      ends_at INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'ACTIVE',
+      created_at INTEGER NOT NULL,
+      settled_at INTEGER,
+      FOREIGN KEY(card_id) REFERENCES cards(id),
+      FOREIGN KEY(seller_id) REFERENCES users(id),
+      FOREIGN KEY(highest_bidder_id) REFERENCES users(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS auctions_one_active_per_card
+      ON auctions(card_id) WHERE status = 'ACTIVE';
+    CREATE INDEX IF NOT EXISTS auctions_status_end_idx ON auctions(status, ends_at);
+    CREATE TABLE IF NOT EXISTS auction_bids (
+      id TEXT PRIMARY KEY,
+      auction_id TEXT NOT NULL,
+      bidder_id TEXT NOT NULL,
+      amount INTEGER NOT NULL CHECK(amount > 0),
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(auction_id) REFERENCES auctions(id),
+      FOREIGN KEY(bidder_id) REFERENCES users(id)
+    );
     CREATE TABLE IF NOT EXISTS external_cache (
       provider TEXT NOT NULL,
       cache_key TEXT NOT NULL,
@@ -90,6 +119,47 @@ export function migrate() {
     );
     CREATE INDEX IF NOT EXISTS quiz_questions_user_idx ON quiz_questions(user_id, created_at DESC);
   `);
+  migrateLegacyListingsUniqueConstraint();
+}
+
+function migrateLegacyListingsUniqueConstraint() {
+  const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'listings'").get();
+  const sql = String(row?.sql || "");
+  if (!/card_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(sql)) return;
+
+  db.exec("DROP INDEX IF EXISTS listings_one_active_per_card");
+  db.exec("PRAGMA foreign_keys = OFF");
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.exec(`
+      CREATE TABLE listings_v2 (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL,
+        seller_id TEXT NOT NULL,
+        price INTEGER NOT NULL CHECK(price > 0),
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        buyer_id TEXT,
+        created_at INTEGER NOT NULL,
+        sold_at INTEGER,
+        FOREIGN KEY(card_id) REFERENCES cards(id),
+        FOREIGN KEY(seller_id) REFERENCES users(id),
+        FOREIGN KEY(buyer_id) REFERENCES users(id)
+      );
+      INSERT INTO listings_v2 (id, card_id, seller_id, price, status, buyer_id, created_at, sold_at)
+        SELECT id, card_id, seller_id, price, status, buyer_id, created_at, sold_at FROM listings;
+      DROP TABLE listings;
+      ALTER TABLE listings_v2 RENAME TO listings;
+      CREATE INDEX listings_status_idx ON listings(status, created_at DESC);
+      CREATE UNIQUE INDEX listings_one_active_per_card
+        ON listings(card_id) WHERE status = 'ACTIVE';
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
 }
 
 export function ensureUser(id = "explorer", displayName = "Explorer") {
@@ -240,11 +310,151 @@ export function listMarket() {
     }));
 }
 
+function hydrateAuction(row) {
+  if (!row) return null;
+  const cardRow = db.prepare("SELECT * FROM cards WHERE id = ?").get(row.card_id);
+  return {
+    id: row.id,
+    sellerId: row.seller_id,
+    startingPrice: Number(row.starting_price),
+    highestBid: row.highest_bid == null ? null : Number(row.highest_bid),
+    highestBidderId: row.highest_bidder_id || null,
+    endsAt: Number(row.ends_at),
+    status: row.status,
+    createdAt: Number(row.created_at),
+    card: hydrateCard(cardRow),
+  };
+}
+
+export function settleExpiredAuctions() {
+  migrate();
+  const expired = db.prepare(
+    "SELECT id FROM auctions WHERE status = 'ACTIVE' AND ends_at <= ? ORDER BY ends_at ASC"
+  ).all(nowMs());
+  for (const { id } of expired) settleAuction(id);
+}
+
+export function settleAuction(auctionId) {
+  migrate();
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const auction = db.prepare("SELECT * FROM auctions WHERE id = ?").get(auctionId);
+    if (!auction || auction.status !== "ACTIVE") {
+      db.exec("COMMIT");
+      return auction ? hydrateAuction(auction) : null;
+    }
+    if (Number(auction.ends_at) > nowMs()) throw new Error("Auction has not ended");
+
+    if (auction.highest_bidder_id && auction.highest_bid != null) {
+      const fee = Math.floor(Number(auction.highest_bid) * 0.05);
+      const proceeds = Number(auction.highest_bid) - fee;
+      db.prepare("UPDATE cards SET owner_id = ? WHERE id = ?")
+        .run(auction.highest_bidder_id, auction.card_id);
+      db.prepare("UPDATE users SET coins = coins + ? WHERE id = ?")
+        .run(proceeds, auction.seller_id);
+      db.prepare("UPDATE auctions SET status = 'SOLD', settled_at = ? WHERE id = ?")
+        .run(nowMs(), auctionId);
+    } else {
+      db.prepare("UPDATE auctions SET status = 'ENDED', settled_at = ? WHERE id = ?")
+        .run(nowMs(), auctionId);
+    }
+
+    db.exec("COMMIT");
+    return hydrateAuction(db.prepare("SELECT * FROM auctions WHERE id = ?").get(auctionId));
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+export function listAuctions() {
+  migrate();
+  settleExpiredAuctions();
+  return db.prepare(
+    "SELECT * FROM auctions WHERE status = 'ACTIVE' ORDER BY ends_at ASC"
+  ).all().map(hydrateAuction);
+}
+
+export function createAuction(userId, cardId, startingPrice, durationMinutes = 60) {
+  migrate();
+  ensureUser(userId);
+  if (!Number.isSafeInteger(startingPrice) || startingPrice <= 0) {
+    throw new Error("Starting price must be a positive integer");
+  }
+  const duration = Math.max(5, Math.min(7 * 24 * 60, Number(durationMinutes) || 60));
+  const card = db.prepare("SELECT * FROM cards WHERE id = ? AND owner_id = ?").get(cardId, userId);
+  if (!card) throw new Error("Card not owned by seller");
+
+  const fixed = db.prepare("SELECT id FROM listings WHERE card_id = ? AND status = 'ACTIVE'").get(cardId);
+  if (fixed) throw new Error("Card already has an active fixed-price listing");
+
+  const active = db.prepare("SELECT id FROM auctions WHERE card_id = ? AND status = 'ACTIVE'").get(cardId);
+  if (active) throw new Error("Card already has an active auction");
+
+  const id = uuid();
+  db.prepare(`
+    INSERT INTO auctions
+      (id, card_id, seller_id, starting_price, ends_at, status, created_at)
+    VALUES (?, ?, ?, ?, ?, 'ACTIVE', ?)
+  `).run(id, cardId, userId, startingPrice, nowMs() + duration * 60 * 1000, nowMs());
+  return hydrateAuction(db.prepare("SELECT * FROM auctions WHERE id = ?").get(id));
+}
+
+export function placeAuctionBid(userId, auctionId, amount) {
+  migrate();
+  ensureUser(userId);
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("Bid must be a positive integer");
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const auction = db.prepare("SELECT * FROM auctions WHERE id = ? AND status = 'ACTIVE'").get(auctionId);
+    if (!auction) throw new Error("Auction unavailable");
+    if (Number(auction.ends_at) <= nowMs()) {
+      db.exec("ROLLBACK");
+      settleAuction(auctionId);
+      throw new Error("Auction has ended");
+    }
+    if (auction.seller_id === userId) throw new Error("You cannot bid on your own auction");
+
+    const minimum = auction.highest_bid == null
+      ? Number(auction.starting_price)
+      : Number(auction.highest_bid) + 1;
+    if (amount < minimum) throw new Error(`Bid must be at least ${minimum} Coins`);
+
+    const bidder = readUser(userId);
+    if (Number(bidder.coins) < amount) throw new Error("Not enough coins");
+
+    db.prepare("UPDATE users SET coins = coins - ? WHERE id = ?").run(amount, userId);
+    if (auction.highest_bidder_id && auction.highest_bid != null) {
+      db.prepare("UPDATE users SET coins = coins + ? WHERE id = ?")
+        .run(Number(auction.highest_bid), auction.highest_bidder_id);
+    }
+
+    db.prepare(`
+      UPDATE auctions
+      SET highest_bid = ?, highest_bidder_id = ?
+      WHERE id = ?
+    `).run(amount, userId, auctionId);
+    db.prepare(`
+      INSERT INTO auction_bids (id, auction_id, bidder_id, amount, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(uuid(), auctionId, userId, amount, nowMs());
+
+    db.exec("COMMIT");
+    return hydrateAuction(db.prepare("SELECT * FROM auctions WHERE id = ?").get(auctionId));
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  }
+}
+
 export function createListing(userId, cardId, price) {
   migrate(); ensureUser(userId);
   if (!Number.isSafeInteger(price) || price <= 0) throw new Error("Price must be a positive integer");
   const card = db.prepare("SELECT * FROM cards WHERE id = ? AND owner_id = ?").get(cardId, userId);
   if (!card) throw new Error("Card not owned by seller");
+  const auction = db.prepare("SELECT id FROM auctions WHERE card_id = ? AND status = 'ACTIVE'").get(cardId);
+  if (auction) throw new Error("Card already has an active auction");
   const id = uuid();
   db.prepare("INSERT INTO listings (id, card_id, seller_id, price, status, created_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?)")
     .run(id, cardId, userId, price, nowMs());
@@ -285,6 +495,7 @@ export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
     inventory,
     profile: profileStats(userId, inventory),
     market: listMarket(),
+    auctions: listAuctions(),
     catalog: publicCatalog(),
     config: { packIntervalMs: config.packIntervalMs, cardsPerPack: config.cardsPerPack, maxStoredPacks: config.maxStoredPacks, holoRate: config.holoRate, lucaRarityLabel: "UNKNOWN" },
   };
@@ -528,7 +739,7 @@ export function purgeExpiredExternalCache() {
 }
 
 export function resetForTests() {
-  db.exec("DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
+  db.exec("DELETE FROM auction_bids; DELETE FROM auctions; DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
 }
 
 migrate();
