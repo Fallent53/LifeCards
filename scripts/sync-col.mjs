@@ -20,8 +20,16 @@ for (let i = 2; i < process.argv.length; i += 1) {
 }
 
 const datasetKey = String(args.get("dataset") || process.env.COL_DATASET_KEY || "latest-base");
-const scope = String(args.get("scope") || process.env.COL_SCOPE || "Animalia");
-const outputPath = resolve(args.get("output") || process.env.LIFECARDS_TAXONOMY_DB || "./data/animalia.sqlite");
+const scope = String(args.get("scope") || process.env.COL_SCOPE || "Eukaryota");
+const defaultOutput =
+  scope.toLowerCase() === "all"
+    ? "./data/life.sqlite"
+    : scope.toLowerCase() === "eukaryota"
+      ? "./data/eukaryota.sqlite"
+      : scope.toLowerCase() === "animalia"
+        ? "./data/animalia.sqlite"
+        : `./data/${scope.toLowerCase().replace(/[^a-z0-9]+/g,"-")}.sqlite`;
+const outputPath = resolve(args.get("output") || process.env.LIFECARDS_TAXONOMY_DB || defaultOutput);
 const archivePath = resolve(args.get("archive") || `./data/col-${datasetKey}-dwca.zip`);
 const keepArchive = args.get("keep-archive") !== "false" && process.env.COL_KEEP_ARCHIVE !== "0";
 const refreshArchive = args.get("refresh") === "true" || process.env.COL_REFRESH === "1";
@@ -39,15 +47,46 @@ const curatedByScientificName = new Map(
 );
 
 function rarityForRank(rank) {
-  const value = String(rank || "").toLowerCase();
-  if (value === "species") return "COMMON";
-  if (["genus", "subgenus"].includes(value)) return "UNCOMMON";
-  if (["family", "subfamily", "superfamily", "tribe", "subtribe"].includes(value)) return "RARE";
-  if (["order", "suborder", "superorder", "infraorder"].includes(value)) return "SUPER_RARE";
-  if (["class", "subclass", "superclass"].includes(value)) return "ULTRA_RARE";
-  if (["phylum", "subphylum", "superphylum"].includes(value)) return "LEGENDARY";
-  if (["kingdom", "domain"].includes(value)) return "MYTHIC";
-  return null;
+  const value = String(rank || "").toLowerCase().trim();
+
+  if (
+    ["species","subspecies","variety","subvariety","form","subform","strain","pathovar","cultivar"]
+      .includes(value)
+  ) return "COMMON";
+
+  if (
+    ["genus","subgenus","section","subsection","series","subseries","species group","species subgroup"]
+      .includes(value)
+  ) return "UNCOMMON";
+
+  if (
+    ["family","subfamily","superfamily","tribe","subtribe","supertribe"]
+      .includes(value)
+  ) return "RARE";
+
+  if (
+    ["order","suborder","superorder","infraorder","parvorder"]
+      .includes(value)
+  ) return "SUPER_RARE";
+
+  if (
+    ["class","subclass","superclass","infraclass","parvclass"]
+      .includes(value)
+  ) return "ULTRA_RARE";
+
+  if (
+    ["phylum","subphylum","superphylum","division","subdivision","superdivision"]
+      .includes(value)
+  ) return "LEGENDARY";
+
+  if (
+    ["kingdom","subkingdom","superkingdom","domain","empire"]
+      .includes(value)
+  ) return "MYTHIC";
+
+  // CoL also contains legitimate intermediate or unranked accepted nodes.
+  // LifeCards keeps them collectible instead of silently dropping them.
+  return "UNCOMMON";
 }
 
 function gameRarity(scientificName, canonicalName, rank) {
@@ -109,11 +148,42 @@ function acceptedRow(row) {
   return true;
 }
 
+const EUKARYOTE_KINGDOMS = new Set([
+  "animalia",
+  "plantae",
+  "fungi",
+  "chromista",
+  "protozoa",
+  "protista",
+]);
+
+const NON_EUKARYOTE_KINGDOMS = new Set([
+  "bacteria",
+  "archaea",
+  "virus",
+  "viruses",
+  "viridae",
+  "viroids",
+]);
+
 function inScope(row) {
-  if (scope.toLowerCase() === "all") return true;
-  const kingdom = pick(row, "kingdom");
-  const scientific = pick(row, "scientificname", "canonicalname");
-  return kingdom.toLowerCase() === scope.toLowerCase() || scientific.toLowerCase() === scope.toLowerCase();
+  const wanted = scope.toLowerCase().trim();
+  if (wanted === "all") return true;
+
+  const kingdom = pick(row, "kingdom").toLowerCase();
+  const scientific = pick(row, "scientificname", "canonicalname").toLowerCase();
+
+  if (wanted === "eukaryota") {
+    if (scientific === "eukaryota") return true;
+    if (EUKARYOTE_KINGDOMS.has(kingdom)) return true;
+
+    // Future-proofing for new/less common eukaryotic kingdoms in CoL:
+    // include classified kingdoms unless they are explicitly prokaryotic/viral.
+    if (kingdom && !NON_EUKARYOTE_KINGDOMS.has(kingdom)) return true;
+    return false;
+  }
+
+  return kingdom === wanted || scientific === wanted;
 }
 
 function boolExtinct(value) {
@@ -292,7 +362,7 @@ try {
     insert.run(id, parentId, scientificName, canonicalName, authorship, rank, status, extinct, kingdom, sourceDataset, rarity, dropEligible);
     accepted += 1;
     if (rank === "species") species += 1;
-    if (scientificName.toLowerCase() === scope.toLowerCase() && (!rootId || rank === "kingdom")) rootId = id;
+    if (scientificName.toLowerCase() === scope.toLowerCase() && !rootId) rootId = id;
 
     if (accepted % 50000 === 0) {
       db.exec("COMMIT; BEGIN");
@@ -449,7 +519,7 @@ db.exec(`
 `);
 
 if (!rootId && scope.toLowerCase() !== "all") {
-  rootId = db.prepare("SELECT id FROM taxa WHERE scientific_name = ? COLLATE NOCASE ORDER BY rank='kingdom' DESC LIMIT 1").get(scope)?.id ?? null;
+  rootId = db.prepare("SELECT id FROM taxa WHERE scientific_name = ? COLLATE NOCASE ORDER BY child_count DESC LIMIT 1").get(scope)?.id ?? null;
 }
 if (!rootId) {
   rootId = db.prepare("SELECT id FROM taxa WHERE parent_id IS NULL ORDER BY child_count DESC LIMIT 1").get()?.id ?? null;
