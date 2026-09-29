@@ -25,8 +25,14 @@ function readPersistentCache(query, lang) {
     const row = knowledgeDb.prepare(
       "SELECT payload_json, fetched_at FROM knowledge_cache WHERE query = ? AND lang = ?"
     ).get(query, lang);
-    if (!row || Date.now() - Number(row.fetched_at) >= CACHE_TTL_MS) return null;
-    return JSON.parse(row.payload_json);
+    if (!row) return null;
+
+    const payload = JSON.parse(row.payload_json);
+    const hasMedia = Boolean(payload?.media?.imageUrl);
+    const ttl = hasMedia ? CACHE_TTL_MS : Math.min(CACHE_TTL_MS, 24 * 60 * 60 * 1000);
+    if (Date.now() - Number(row.fetched_at) >= ttl) return null;
+
+    return payload;
   } catch {
     return null;
   }
