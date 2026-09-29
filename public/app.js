@@ -25,6 +25,7 @@ const ui={
   treeQuery:"",
   treeSearchResults:[],
   treePayload:null,
+  treeTargetId:null,
   taxonomyStatus:null,
   favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
@@ -708,9 +709,52 @@ function collectTreeScientificNames(root){
   return [...new Set(names)].slice(0,1200);
 }
 
-async function loadTreePayload(rootId){
-  const query=rootId?"&root="+encodeURIComponent(rootId):"";
-  const payload=await api("/api/taxonomy/subtree?depth=4&childLimit=44&nodeLimit=900"+query);
+function findTreeNode(root,id){
+  if(!root||id==null)return null;
+  if(String(root.id)===String(id))return root;
+  for(const child of root.children||[]){
+    const found=findTreeNode(child,id);
+    if(found)return found;
+  }
+  return null;
+}
+
+function treeLoadProfile(node){
+  const rank=String(node?.rank||node?.kind||"").toLowerCase();
+  if(["origin","domain","kingdom"].includes(rank)){
+    return {depth:3,childLimit:30,nodeLimit:520};
+  }
+  if(["phylum","subphylum","class","subclass"].includes(rank)){
+    return {depth:4,childLimit:42,nodeLimit:760};
+  }
+  if(["order","suborder","family","subfamily","superfamily"].includes(rank)){
+    return {depth:5,childLimit:54,nodeLimit:980};
+  }
+  if(["genus","subgenus"].includes(rank)){
+    return {depth:4,childLimit:72,nodeLimit:760};
+  }
+  return {depth:4,childLimit:42,nodeLimit:760};
+}
+
+function treeNodeHint(id){
+  if(!id)return null;
+  const direct=findTreeNode(ui.treePayload?.root,id);
+  if(direct)return direct;
+  const pathNode=(ui.treePayload?.path||[]).find(node=>String(node.id)===String(id));
+  if(pathNode)return pathNode;
+  return (ui.treeSearchResults||[]).find(node=>String(node.id)===String(id))||null;
+}
+
+async function loadTreePayload(rootId,hintNode=null){
+  const profile=treeLoadProfile(hintNode||treeNodeHint(rootId));
+  const params=new URLSearchParams({
+    depth:String(profile.depth),
+    childLimit:String(profile.childLimit),
+    nodeLimit:String(profile.nodeLimit),
+  });
+  if(rootId)params.set("root",rootId);
+
+  const payload=await api("/api/taxonomy/subtree?"+params.toString());
   ui.taxonomyStatus=payload?.status||ui.taxonomyStatus;
 
   try{
@@ -727,17 +771,25 @@ async function loadTreePayload(rootId){
   return payload;
 }
 
-async function focusTree(rootId){
+async function focusTree(rootId,hintNode=null,targetId=null){
   const holder=document.getElementById("radialTreeMap");
-  if(holder)holder.classList.add("loading");
+  if(holder){
+    holder.classList.add("loading","atlas-diving");
+    holder.classList.remove("atlas-ready");
+  }
+  ui.treeTargetId=targetId||null;
+
   try{
-    const payload=await loadTreePayload(rootId);
+    const payload=await loadTreePayload(rootId,hintNode);
     if(ui.view!=="tree")return;
     drawRadialTree(payload);
     renderTreeBreadcrumb(payload);
   }catch(error){
     const target=document.getElementById("radialTreeMap");
-    if(target)target.innerHTML='<div class="radial-empty">'+esc(error.message)+'</div>';
+    if(target){
+      target.classList.remove("loading","atlas-diving");
+      target.innerHTML='<div class="radial-empty">'+esc(error.message)+'</div>';
+    }
   }
 }
 
@@ -760,23 +812,27 @@ function drawRadialTree(payload){
   const ownedNames=new Set((payload.ownedScientificNames||[]).map(name=>String(name).toLowerCase()));
   radialMap=new RadialTreeMap(holder,{
     isOwned:(node)=>ownedNames.has(String(node.scientificName||"").toLowerCase()),
-    onFocus:(node)=>focusTree(node.id),
+    onFocus:(node)=>focusTree(node.id,node),
     onSelect:(node)=>openTaxonomyNode(node),
-    onHome:()=>focusTree(payload.status?.mapRootId||ui.taxonomyStatus?.mapRootId||"luca"),
+    onHome:()=>focusTree(payload.status?.mapRootId||ui.taxonomyStatus?.mapRootId||"luca",{rank:"origin"}),
     onUp:(current)=>{
       const path=current?.path||[];
       const parent=path.length>1?path[path.length-2]:null;
-      if(parent)focusTree(parent.id);
+      if(parent)focusTree(parent.id,parent);
     }
   });
   radialMap.render(payload);
+  if(ui.treeTargetId){
+    radialMap.revealTarget?.(ui.treeTargetId);
+    ui.treeTargetId=null;
+  }
 }
 
 async function openTaxonomyNode(node){
   const definition=taxonToDefinition(node);
   if(!definition)return;
   if(Number(node.childCount||0)>0||String(node.rank||"").toLowerCase()!=="species"){
-    return focusTree(node.id);
+    return focusTree(node.id,node);
   }
   openCardModal(definition,null);
 }
@@ -815,15 +871,19 @@ function renderTreeSearchResults(){
   const results=ui.treeSearchResults||[];
   target.classList.add("visible");
   target.innerHTML=results.length?results.map(node=>
-    '<button data-tree-result="'+esc(node.id)+'"><span class="tree-result-dot"></span><div><b>'+esc(node.commonName||node.scientificName)+'</b><small>'+esc(node.scientificName)+' · '+esc(node.rank||"")+' · '+formatNumber(node.childCount||0)+' children</small></div></button>'
+    '<button data-tree-result="'+esc(node.id)+'"><span class="tree-result-dot"></span><div><b>'+esc(node.commonName||node.scientificName)+'</b><small>'+esc(node.scientificName)+' · '+esc(node.rank||"")+(node.descendantSpeciesCount?' · '+formatNumber(node.descendantSpeciesCount)+' species':node.childCount?' · '+formatNumber(node.childCount)+' branches':'')+'</small></div></button>'
   ).join(""):'<div class="tree-search-empty">No taxon found</div>';
   target.querySelectorAll("[data-tree-result]").forEach(button=>{
     button.onclick=()=>{
       const node=results.find(item=>String(item.id)===String(button.dataset.treeResult));
       ui.treeQuery="";
       ui.treeSearchResults=[];
-      if(node&&String(node.rank||"").toLowerCase()!=="species")focusTree(node.id);
-      else if(node)openTaxonomyNode(node);
+      if(node&&String(node.rank||"").toLowerCase()==="species"){
+        if(node.parentId)focusTree(node.parentId,{rank:"genus"},node.id);
+        else openTaxonomyNode(node);
+      }else if(node){
+        focusTree(node.id,node);
+      }
       const input=document.getElementById("treeSearch");
       if(input)input.value="";
       renderTreeSearchResults();
