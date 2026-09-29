@@ -95,6 +95,7 @@ export function taxonomyStatus() {
       taxonCount: catalog.length,
       speciesCount: catalog.filter((x) => x.kind === "species").length,
       rootId: "animalia",
+      mapRootId: "luca",
       source: "LifeCards seed catalog",
       hint: "Run npm install && npm run sync:col to import Catalogue of Life Animalia.",
     };
@@ -106,6 +107,7 @@ export function taxonomyStatus() {
     taxonCount: Number(metaValue(db, "taxon_count") || 0),
     speciesCount: Number(metaValue(db, "species_count") || 0),
     rootId: metaValue(db, "root_id") || null,
+    mapRootId: "luca",
     scope: metaValue(db, "scope") || "Animalia",
     datasetKey: metaValue(db, "dataset_key"),
     release: metaValue(db, "release"),
@@ -248,6 +250,73 @@ export function getPath(id, maxDepth = 64) {
   return path;
 }
 
+
+function syntheticBackboneNode(id, scientificName, commonName, rank, childCount = 0) {
+  return {
+    id,
+    parentId: null,
+    scientificName,
+    canonicalName: scientificName,
+    commonName,
+    rank,
+    status: "backbone",
+    extinct: false,
+    childCount,
+    kind: id === "luca" ? "origin" : "taxon",
+    source: "LifeCards universal backbone",
+    sourceId: id,
+  };
+}
+
+function backbonePathForAnimalia(path) {
+  if (!Array.isArray(path) || !path.length) return path || [];
+  const hasAnimalia = path.some((node) => String(node.scientificName).toLowerCase() === "animalia");
+  if (!hasAnimalia) return path;
+  const prefix = [
+    syntheticBackboneNode("luca", "LUCA", "LUCA", "origin", 3),
+    syntheticBackboneNode("eukaryota", "Eukaryota", "Eukaryotes", "domain", 1),
+  ];
+  const existing = new Set(path.map((node) => String(node.id)));
+  return [...prefix.filter((node) => !existing.has(node.id)), ...path];
+}
+
+function buildUniversalSubtree(status, { depth = 4, childLimit = 48, nodeLimit = 900 } = {}) {
+  const luca = { ...syntheticBackboneNode("luca", "LUCA", "LUCA", "origin", 3), children: [], truncatedChildren: 0 };
+  const bacteria = { ...syntheticBackboneNode("bacteria", "Bacteria", "Bacteria", "domain", 0), parentId: "luca", children: [], truncatedChildren: 0 };
+  const archaea = { ...syntheticBackboneNode("archaea", "Archaea", "Archaea", "domain", 0), parentId: "luca", children: [], truncatedChildren: 0 };
+  const eukaryota = { ...syntheticBackboneNode("eukaryota", "Eukaryota", "Eukaryotes", "domain", 1), parentId: "luca", children: [], truncatedChildren: 0 };
+  luca.children.push(bacteria, archaea, eukaryota);
+
+  let nodesUsed = 4;
+  if (depth >= 2) {
+    const importedRoot = status.ready ? getTaxon(status.rootId) : seedDefinition("animalia");
+    if (importedRoot) {
+      if (depth <= 2) {
+        eukaryota.children.push({ ...importedRoot, parentId: "eukaryota", children: [], truncatedChildren: importedRoot.childCount || 0 });
+        nodesUsed += 1;
+      } else {
+        const animalPayload = getSubtree(importedRoot.id, {
+          depth: Math.max(1, depth - 2),
+          childLimit,
+          nodeLimit: Math.max(20, nodeLimit - nodesUsed),
+        });
+        if (animalPayload?.root) {
+          eukaryota.children.push({ ...animalPayload.root, parentId: "eukaryota" });
+          nodesUsed += animalPayload.nodesUsed;
+        }
+      }
+    }
+  }
+
+  return {
+    root: luca,
+    nodesUsed,
+    maxNodes: nodeLimit,
+    status,
+    path: [syntheticBackboneNode("luca", "LUCA", "LUCA", "origin", 3)],
+  };
+}
+
 const subtreeCache = new Map();
 const SUBTREE_CACHE_MAX = 80;
 
@@ -301,7 +370,47 @@ function getChildrenBatch(parentIds, childLimit) {
 
 export function getSubtree(rootId, { depth = 3, childLimit = 48, nodeLimit = 900 } = {}) {
   const status = taxonomyStatus();
-  const resolvedRoot = rootId || status.rootId || "animalia";
+  const resolvedRoot = rootId || status.mapRootId || status.rootId || "luca";
+
+  if (resolvedRoot === "luca") {
+    const cacheKey = ["universal", depth, childLimit, nodeLimit, status.mode, status.release || ""].join("|");
+    if (subtreeCache.has(cacheKey)) return subtreeCache.get(cacheKey);
+    return cacheSubtree(cacheKey, buildUniversalSubtree(status, { depth, childLimit, nodeLimit }));
+  }
+
+  if (resolvedRoot === "eukaryota") {
+    const universal = buildUniversalSubtree(status, { depth: depth + 1, childLimit, nodeLimit });
+    const root = universal.root.children.find((node) => node.id === "eukaryota");
+    return {
+      ...universal,
+      root,
+      nodesUsed: Math.max(1, universal.nodesUsed - 3),
+      path: [
+        syntheticBackboneNode("luca", "LUCA", "LUCA", "origin", 3),
+        syntheticBackboneNode("eukaryota", "Eukaryota", "Eukaryotes", "domain", 1),
+      ],
+    };
+  }
+
+  if (resolvedRoot === "bacteria" || resolvedRoot === "archaea") {
+    const node = syntheticBackboneNode(
+      resolvedRoot,
+      resolvedRoot === "bacteria" ? "Bacteria" : "Archaea",
+      resolvedRoot === "bacteria" ? "Bacteria" : "Archaea",
+      "domain",
+      0
+    );
+    return {
+      root: { ...node, parentId: "luca", children: [], truncatedChildren: 0 },
+      nodesUsed: 1,
+      maxNodes: nodeLimit,
+      status,
+      path: [
+        syntheticBackboneNode("luca", "LUCA", "LUCA", "origin", 3),
+        node,
+      ],
+    };
+  }
   const cacheKey = [resolvedRoot, depth, childLimit, nodeLimit, status.mode, status.release || ""].join("|");
   if (subtreeCache.has(cacheKey)) return subtreeCache.get(cacheKey);
 
@@ -350,7 +459,7 @@ export function getSubtree(rootId, { depth = 3, childLimit = 48, nodeLimit = 900
     nodesUsed,
     maxNodes: nodeLimit,
     status,
-    path: getPath(root.id),
+    path: backbonePathForAnimalia(getPath(root.id)),
   };
   return cacheSubtree(cacheKey, payload);
 }
