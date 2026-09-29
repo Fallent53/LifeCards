@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v10-gameplay-medium-ok";
+const AUDIT_RESOLVER_VERSION="v11-rate-safe-bulk";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -247,7 +247,7 @@ const rows=taxonomy.prepare(`
   WHERE p.taxon_id NOT IN (
     SELECT taxon_id
     FROM qualitydb.card_quality
-    WHERE resolver_version = ?
+    WHERE resolver_version = ? AND status <> 'ERROR'
   )
   ORDER BY
     CASE p.rarity
@@ -298,6 +298,10 @@ const upsert=quality.prepare(`
 `);
 
 function classify(row,knowledge){
+  if(knowledge?.auditTransientError){
+    return {status:"ERROR",reason:knowledge.auditTransientError};
+  }
+
   const scientific=String(row.scientific_name||"").trim();
   const rank=String(row.rank||"").trim();
   if(!scientific||!rank){
@@ -403,7 +407,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
   }
 
   if(offset+auditBatchSize<rows.length){
-    await new Promise((resolve)=>setTimeout(resolve,180));
+    await new Promise((resolve)=>setTimeout(resolve,1200));
   }
 }
 
