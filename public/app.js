@@ -232,8 +232,13 @@ function taxonToDefinition(taxon){
 
 function taxonomySummary(status){
   if(!status)return "Taxonomy unavailable";
+  if(status.mode==="catalogue-of-life-live"){
+    return "Catalogue of Life live · full remote catalogue";
+  }
   if(status.ready){
-    return "Catalogue of Life · "+formatNumber(status.taxonCount)+" taxa · "+formatNumber(status.speciesCount)+" species";
+    const taxa=status.taxonCount!=null?formatNumber(status.taxonCount)+" taxa":"local taxonomy";
+    const species=status.speciesCount!=null?" · "+formatNumber(status.speciesCount)+" species":"";
+    return "Catalogue of Life · "+taxa+species;
   }
   return "Seed tree · import full Animalia with npm run sync:col";
 }
@@ -458,7 +463,7 @@ function drawRadialTree(payload){
 async function openTaxonomyNode(node){
   const definition=taxonToDefinition(node);
   if(!definition)return;
-  if(Number(node.childCount||0)>0){
+  if(Number(node.childCount||0)>0||String(node.rank||"").toLowerCase()!=="species"){
     return focusTree(node.id);
   }
   openCardModal(definition,null);
@@ -505,7 +510,7 @@ function renderTreeSearchResults(){
       const node=results.find(item=>String(item.id)===String(button.dataset.treeResult));
       ui.treeQuery="";
       ui.treeSearchResults=[];
-      if(node&&Number(node.childCount||0)>0)focusTree(node.id);
+      if(node&&String(node.rank||"").toLowerCase()!=="species")focusTree(node.id);
       else if(node)openTaxonomyNode(node);
       const input=document.getElementById("treeSearch");
       if(input)input.value="";
