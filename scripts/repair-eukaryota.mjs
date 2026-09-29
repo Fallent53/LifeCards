@@ -35,6 +35,25 @@ if(!tableExists("taxa")||!tableExists("meta")){
 }
 
 console.log("Resolving strict eukaryotic kingdom descendants…");
+
+const kingdomBreakdown=db.prepare(`
+  SELECT
+    lower(trim(COALESCE(kingdom,''))) AS kingdom_key,
+    COUNT(*) AS count
+  FROM taxa
+  GROUP BY kingdom_key
+  ORDER BY count DESC
+  LIMIT 20
+`).all();
+
+console.log(
+  "Largest kingdom buckets:",
+  kingdomBreakdown
+    .slice(0,10)
+    .map(row=>`${row.kingdom_key||"(blank)"}=${Number(row.count).toLocaleString()}`)
+    .join(" · ")
+);
+
 db.exec(`
   DROP TABLE IF EXISTS temp.keep_eukaryota;
   CREATE TEMP TABLE keep_eukaryota(id TEXT PRIMARY KEY) WITHOUT ROWID;
@@ -43,10 +62,13 @@ db.exec(`
   WITH RECURSIVE euk(id) AS (
     SELECT id
     FROM taxa
-    WHERE lower(trim(scientific_name)) IN (
+    WHERE lower(trim(COALESCE(kingdom,''))) IN (
       'animalia','plantae','fungi','chromista','protozoa','protista'
     )
-       OR lower(trim(canonical_name)) IN (
+       OR lower(trim(COALESCE(scientific_name,''))) IN (
+      'animalia','plantae','fungi','chromista','protozoa','protista'
+    )
+       OR lower(trim(COALESCE(canonical_name,''))) IN (
       'animalia','plantae','fungi','chromista','protozoa','protista'
     )
 
@@ -62,10 +84,13 @@ db.exec(`
 const keepCount=Number(
   db.prepare("SELECT COUNT(*) AS c FROM keep_eukaryota").get()?.c||0
 );
-if(keepCount<1000){
+if(keepCount<100000){
   db.close();
   await rm(repairPath,{force:true});
-  throw new Error(`Eukaryota repair refused: only ${keepCount} descendant taxa were resolved`);
+  throw new Error(
+    `Eukaryota repair refused: only ${keepCount.toLocaleString()} taxa were resolved. `+
+    "The database kingdom labels do not look compatible; rebuild with npm run sync:col."
+  );
 }
 console.log(`Keeping ${keepCount.toLocaleString()} CoL eukaryotic taxa.`);
 
@@ -110,7 +135,7 @@ try{
       )
   `).run(rootId,rootId);
 
-  console.log("Rebuilding child counts, search index and drop pools…");
+  console.log("Rebuilding child counts, descendant species counts, search index and drop pools…");
   db.exec(`
     UPDATE taxa SET child_count=0;
     DROP TABLE IF EXISTS temp.child_counts;
@@ -125,6 +150,44 @@ try{
       (SELECT c FROM child_counts WHERE child_counts.id=taxa.id),0
     );
     DROP TABLE child_counts;
+
+    UPDATE taxa
+    SET descendant_species_count=CASE WHEN rank='species' THEN 1 ELSE 0 END;
+
+    DROP TABLE IF EXISTS temp.species_counts;
+    CREATE TEMP TABLE species_counts(
+      id TEXT PRIMARY KEY,
+      species_count INTEGER NOT NULL
+    );
+
+    INSERT INTO species_counts(id,species_count)
+    WITH RECURSIVE lineage(species_id,ancestor_id) AS (
+      SELECT id,parent_id
+      FROM taxa
+      WHERE rank='species' AND parent_id IS NOT NULL
+
+      UNION ALL
+
+      SELECT lineage.species_id,parent.parent_id
+      FROM lineage
+      JOIN taxa parent ON parent.id=lineage.ancestor_id
+      WHERE parent.parent_id IS NOT NULL
+    )
+    SELECT ancestor_id,COUNT(*)
+    FROM lineage
+    WHERE ancestor_id IS NOT NULL
+    GROUP BY ancestor_id;
+
+    UPDATE taxa
+    SET descendant_species_count=
+      CASE
+        WHEN rank='species' THEN 1
+        ELSE COALESCE(
+          (SELECT species_count FROM species_counts WHERE species_counts.id=taxa.id),
+          0
+        )
+      END;
+    DROP TABLE species_counts;
 
     DROP TABLE IF EXISTS taxa_fts;
     CREATE VIRTUAL TABLE taxa_fts USING fts5(
@@ -180,7 +243,7 @@ try{
   setMeta.run("repaired_at",new Date().toISOString());
 
   db.exec("COMMIT");
-  console.log(`Removed ${(before-after+1).toLocaleString()} non-eukaryotic records.`);
+  console.log(`Removed ${Math.max(0,before-(after-1)).toLocaleString()} non-eukaryotic records.`);
   console.log(`Taxa: ${after.toLocaleString()} · species: ${species.toLocaleString()} · droppable: ${drops.toLocaleString()}`);
 }catch(error){
   try{db.exec("ROLLBACK")}catch{}
