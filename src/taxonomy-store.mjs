@@ -124,6 +124,18 @@ export function getTaxon(id) {
   return mapRow(row);
 }
 
+function ftsQuery(query) {
+  const tokens = String(query || "")
+    .normalize("NFKD")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 6);
+  if (!tokens.length) return null;
+  return tokens.map((token) => `"${token.replaceAll('"', '""')}"*`).join(" AND ");
+}
+
 export function searchTaxa(query, limit = 30) {
   const q = String(query || "").trim();
   if (!q) return [];
@@ -139,8 +151,33 @@ export function searchTaxa(query, limit = 30) {
       .map((entry) => seedDefinition(entry.id));
   }
 
+  const fts = ftsQuery(q);
+  if (fts) {
+    try {
+      const rows = db.prepare(`
+        SELECT t.id,t.parent_id,t.scientific_name,t.canonical_name,t.common_name,
+               t.rank,t.status,t.extinct,t.child_count
+        FROM taxa_fts f
+        JOIN taxa t ON t.id = f.id
+        WHERE taxa_fts MATCH ?
+        ORDER BY
+          CASE
+            WHEN t.scientific_name = ? COLLATE NOCASE THEN 0
+            WHEN t.canonical_name = ? COLLATE NOCASE THEN 0
+            WHEN t.common_name = ? COLLATE NOCASE THEN 0
+            ELSE 1
+          END,
+          bm25(taxa_fts),
+          LENGTH(t.scientific_name)
+        LIMIT ?
+      `).all(fts, q, q, q, safeLimit);
+      if (rows.length) return rows.map(mapRow);
+    } catch {
+      // Older local DBs may not have the FTS table yet; fall back to LIKE.
+    }
+  }
+
   const prefix = `${q}%`;
-  const contains = `%${q}%`;
   const rows = db.prepare(`
     SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
     FROM taxa
@@ -152,15 +189,11 @@ export function searchTaxa(query, limit = 30) {
         WHEN scientific_name = ? COLLATE NOCASE THEN 0
         WHEN canonical_name = ? COLLATE NOCASE THEN 0
         WHEN common_name = ? COLLATE NOCASE THEN 0
-        WHEN scientific_name LIKE ? COLLATE NOCASE THEN 1
-        WHEN canonical_name LIKE ? COLLATE NOCASE THEN 1
-        WHEN common_name LIKE ? COLLATE NOCASE THEN 1
-        ELSE 2
+        ELSE 1
       END,
-      LENGTH(scientific_name),
       scientific_name
     LIMIT ?
-  `).all(contains, contains, contains, q, q, q, prefix, prefix, prefix, safeLimit);
+  `).all(prefix, prefix, prefix, q, q, q, safeLimit);
   return rows.map(mapRow);
 }
 
@@ -215,32 +248,109 @@ export function getPath(id, maxDepth = 64) {
   return path;
 }
 
-export function getSubtree(rootId, { depth = 3, childLimit = 48, nodeLimit = 900 } = {}) {
-  const status = taxonomyStatus();
-  const resolvedRoot = rootId || status.rootId || "animalia";
-  const root = getTaxon(resolvedRoot) || getTaxon(status.rootId) || seedDefinition("animalia");
-  if (!root) return null;
+const subtreeCache = new Map();
+const SUBTREE_CACHE_MAX = 80;
 
-  let nodesUsed = 1;
-  function expand(node, level) {
-    const output = { ...node, children: [] };
-    if (level >= depth || nodesUsed >= nodeLimit || node.childCount === 0) return output;
+function cacheSubtree(key, value) {
+  if (subtreeCache.has(key)) subtreeCache.delete(key);
+  subtreeCache.set(key, value);
+  while (subtreeCache.size > SUBTREE_CACHE_MAX) {
+    subtreeCache.delete(subtreeCache.keys().next().value);
+  }
+  return value;
+}
 
-    const children = getChildren(node.id, childLimit);
-    for (const child of children) {
-      if (nodesUsed >= nodeLimit) break;
-      nodesUsed += 1;
-      output.children.push(expand(child, level + 1));
-    }
-    output.truncatedChildren = Math.max(0, Number(node.childCount || 0) - output.children.length);
+function getChildrenBatch(parentIds, childLimit) {
+  const db = openFullDb();
+  if (!db) {
+    const output = new Map();
+    for (const id of parentIds) output.set(String(id), seedChildren(String(id)).slice(0, childLimit));
     return output;
   }
 
-  return {
-    root: expand(root, 0),
+  const output = new Map(parentIds.map((id) => [String(id), []]));
+  const chunkSize = 160;
+  for (let offset = 0; offset < parentIds.length; offset += chunkSize) {
+    const chunk = parentIds.slice(offset, offset + chunkSize).map(String);
+    if (!chunk.length) continue;
+    const placeholders = chunk.map(() => "?").join(",");
+    const rows = db.prepare(`
+      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+      FROM (
+        SELECT t.*,
+               ROW_NUMBER() OVER (
+                 PARTITION BY parent_id
+                 ORDER BY child_count DESC, rank, scientific_name
+               ) AS rn
+        FROM taxa t
+        WHERE parent_id IN (${placeholders})
+      )
+      WHERE rn <= ?
+      ORDER BY parent_id, rn
+    `).all(...chunk, childLimit);
+
+    for (const row of rows) {
+      const mapped = mapRow(row);
+      const key = String(mapped.parentId);
+      if (!output.has(key)) output.set(key, []);
+      output.get(key).push(mapped);
+    }
+  }
+  return output;
+}
+
+export function getSubtree(rootId, { depth = 3, childLimit = 48, nodeLimit = 900 } = {}) {
+  const status = taxonomyStatus();
+  const resolvedRoot = rootId || status.rootId || "animalia";
+  const cacheKey = [resolvedRoot, depth, childLimit, nodeLimit, status.mode, status.release || ""].join("|");
+  if (subtreeCache.has(cacheKey)) return subtreeCache.get(cacheKey);
+
+  const root = getTaxon(resolvedRoot) || getTaxon(status.rootId) || seedDefinition("animalia");
+  if (!root) return null;
+
+  const rootOutput = { ...root, children: [], truncatedChildren: 0 };
+  const outputById = new Map([[String(root.id), rootOutput]]);
+  let frontier = [root];
+  let nodesUsed = 1;
+
+  for (let level = 0; level < depth && frontier.length && nodesUsed < nodeLimit; level += 1) {
+    const parents = frontier.filter((node) => Number(node.childCount || 0) > 0);
+    if (!parents.length) break;
+
+    const grouped = getChildrenBatch(parents.map((node) => node.id), childLimit);
+    const next = [];
+
+    for (const parent of parents) {
+      const parentOutput = outputById.get(String(parent.id));
+      const children = grouped.get(String(parent.id)) || [];
+      const room = Math.max(0, nodeLimit - nodesUsed);
+      const acceptedChildren = children.slice(0, room);
+
+      parentOutput.truncatedChildren = Math.max(
+        0,
+        Number(parent.childCount || 0) - acceptedChildren.length
+      );
+
+      for (const child of acceptedChildren) {
+        const childOutput = { ...child, children: [], truncatedChildren: 0 };
+        parentOutput.children.push(childOutput);
+        outputById.set(String(child.id), childOutput);
+        next.push(child);
+        nodesUsed += 1;
+        if (nodesUsed >= nodeLimit) break;
+      }
+      if (nodesUsed >= nodeLimit) break;
+    }
+
+    frontier = next;
+  }
+
+  const payload = {
+    root: rootOutput,
     nodesUsed,
     maxNodes: nodeLimit,
     status,
     path: getPath(root.id),
   };
+  return cacheSubtree(cacheKey, payload);
 }
