@@ -697,11 +697,33 @@ function renderMarket(){
   wireMediaObservers();
 }
 
+function collectTreeScientificNames(root){
+  const names=[];
+  const walk=node=>{
+    if(!node)return;
+    if(node.scientificName)names.push(node.scientificName);
+    for(const child of node.children||[])walk(child);
+  };
+  walk(root);
+  return [...new Set(names)].slice(0,1200);
+}
+
 async function loadTreePayload(rootId){
   const query=rootId?"&root="+encodeURIComponent(rootId):"";
   const payload=await api("/api/taxonomy/subtree?depth=4&childLimit=44&nodeLimit=900"+query);
-  ui.treePayload=payload;
   ui.taxonomyStatus=payload?.status||ui.taxonomyStatus;
+
+  try{
+    const owned=await api("/api/collection/owned",{
+      method:"POST",
+      body:JSON.stringify({scientificNames:collectTreeScientificNames(payload?.root)})
+    });
+    payload.ownedScientificNames=owned.scientificNames||[];
+  }catch{
+    payload.ownedScientificNames=[];
+  }
+
+  ui.treePayload=payload;
   return payload;
 }
 
@@ -735,7 +757,7 @@ function drawRadialTree(payload){
   const holder=document.getElementById("radialTreeMap");
   if(!holder||!payload)return;
   holder.classList.remove("loading");
-  const ownedNames=new Set(ui.state.inventory.map(card=>String(card.definition?.scientificName||"").toLowerCase()).filter(Boolean));
+  const ownedNames=new Set((payload.ownedScientificNames||[]).map(name=>String(name).toLowerCase()));
   radialMap=new RadialTreeMap(holder,{
     isOwned:(node)=>ownedNames.has(String(node.scientificName||"").toLowerCase()),
     onFocus:(node)=>focusTree(node.id),
