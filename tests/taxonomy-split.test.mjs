@@ -75,11 +75,14 @@ function makeDb(path,{scope,rootId,rows,withDropPool=false}){
 }
 
 makeDb(gamePath,{
-  scope:"Animalia",
-  rootId:"game-animalia",
+  scope:"Eukaryota",
+  rootId:"game-eukaryota",
   withDropPool:true,
   rows:[
-    {id:"game-animalia",scientificName:"Animalia",rank:"kingdom",childCount:1,descendantSpeciesCount:1,gameRarity:"MYTHIC"},
+    {id:"game-eukaryota",scientificName:"Eukaryota",rank:"domain",childCount:3,descendantSpeciesCount:3,gameRarity:"MYTHIC"},
+    {id:"game-animalia",parentId:"game-eukaryota",scientificName:"Animalia",rank:"kingdom",childCount:2,descendantSpeciesCount:2,gameRarity:"MYTHIC"},
+    {id:"game-plantae",parentId:"game-eukaryota",scientificName:"Plantae",rank:"kingdom",childCount:0,descendantSpeciesCount:0,gameRarity:"MYTHIC"},
+    {id:"game-fungi",parentId:"game-eukaryota",scientificName:"Fungi",rank:"kingdom",childCount:0,descendantSpeciesCount:0,gameRarity:"MYTHIC"},
     {id:"game-species",parentId:"game-animalia",scientificName:"Testus animalis",rank:"species",descendantSpeciesCount:1,gameRarity:"COMMON"},
     {id:"game-unready",parentId:"game-animalia",scientificName:"Wrongus imagus",rank:"species",descendantSpeciesCount:1,gameRarity:"COMMON"},
   ],
@@ -136,7 +139,7 @@ test("full-life map and gameplay drop taxonomy remain separate",()=>{
   assert.equal(status.ready,true);
   assert.equal(status.fullLifeMap,true);
   assert.equal(status.mapScope,"all");
-  assert.equal(status.dropScope,"Animalia");
+  assert.equal(status.dropScope,"Eukaryota");
   assert.equal(status.dropPoolReady,true);
   assert.equal(status.dropPool.COMMON,2);
   assert.equal(status.cardQuality.complete,true);
@@ -145,10 +148,12 @@ test("full-life map and gameplay drop taxonomy remain separate",()=>{
   assert.equal(status.cardQuality.readyPoolActive,true);
 });
 
-test("map lookups use full-life database while gameplay resolution uses Animalia",()=>{
+test("map lookups use full-life database while gameplay resolution uses Eukaryota",()=>{
   assert.equal(taxonomy.getTaxon("map-bacteria")?.scientificName,"Bacteria");
   assert.equal(taxonomy.getTaxon("game-animalia"),null);
   assert.equal(taxonomy.getGameplayTaxon("game-animalia")?.scientificName,"Animalia");
+  assert.equal(taxonomy.getGameplayTaxon("game-plantae")?.scientificName,"Plantae");
+  assert.equal(taxonomy.getGameplayTaxon("game-fungi")?.scientificName,"Fungi");
 });
 
 test("drop selection uses only READY cards after a complete audit",()=>{
