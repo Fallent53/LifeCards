@@ -57,6 +57,14 @@ Run an economy/RNG simulation:
 node scripts/simulate.mjs 20000
 ```
 
+Refresh the scientific metadata snapshot from Wikipedia/Wikidata/NCBI:
+
+```bash
+npm run sync:knowledge
+```
+
+Card detail views resolve Wikipedia summaries, Wikidata entity IDs and NCBI Taxonomy IDs. When a taxid is available, LifeCards exposes a direct **View in Lifemap** deep-link to the matching node in Lifemap NCBI.
+
 ## LUCA development mode
 
 Production-intent default:
