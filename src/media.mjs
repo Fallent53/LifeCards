@@ -235,11 +235,11 @@ function gbifImageUrl(recordKey, identifier) {
   return `https://api.gbif.org/v1/image/cache/800x/occurrence/${recordKey}/media/${hash}`;
 }
 
-export async function searchGbifImage(scientificName) {
+export async function searchGbifImage(scientificName,{fieldOnly=false}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
 
-  const key=`gbif:${query.toLowerCase()}`;
+  const key=`gbif:${fieldOnly?"field:":"any:"}${query.toLowerCase()}`;
   if(memoryCache.has(key))return memoryCache.get(key);
 
   async function occurrenceSearch(paramsObject){
@@ -259,6 +259,11 @@ export async function searchGbifImage(scientificName) {
   function choose(json){
     const canonical=normalizeScientificName(query);
     for(const occurrence of json?.results??[]){
+      if(fieldOnly){
+        const basis=String(occurrence.basisOfRecord||"").toUpperCase();
+        if(!["HUMAN_OBSERVATION","MACHINE_OBSERVATION","OBSERVATION"].includes(basis))continue;
+      }
+
       const occurrenceName=normalizeScientificName(
         occurrence.acceptedScientificName||
         occurrence.species||
@@ -579,20 +584,69 @@ export async function searchEolImage(scientificName) {
   return null;
 }
 
-export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
+export async function searchSupplementalRealMedia(scientificName,{rank="",extinct=false}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
 
-  try{
-    const gbif=await searchGbifImage(query);
-    if(gbif)return {...gbif,resolver:gbif.resolverHint||"gbif-exact-or-accepted",confidence:"HIGH"};
-  }catch{}
-
   const rankKey=String(rank||"").toLowerCase();
-  const allowDescendant=![
+  const speciesLike=[
     "species","subspecies","variety","subvariety","form","subform","strain"
   ].includes(rankKey);
 
+  // Living species: prefer research-grade iNaturalist observations. Research
+  // Grade is specifically designed around verifiable, wild/naturalized
+  // observations and is a much better gameplay image than museum drawers.
+  if(speciesLike&&!extinct){
+    try{
+      const inat=await searchINaturalistImage(query,{allowDescendant:false});
+      if(inat)return {
+        ...inat,
+        resolver:"inaturalist-exact-wild",
+        confidence:"HIGH",
+        mediaMatch:"EXACT_WILD",
+      };
+    }catch{}
+
+    try{
+      const gbif=await searchGbifImage(query,{fieldOnly:true});
+      if(gbif)return {
+        ...gbif,
+        resolver:gbif.resolverHint
+          ?"gbif-accepted-field-observation"
+          :"gbif-exact-field-observation",
+        confidence:"HIGH",
+        mediaMatch:"EXACT_FIELD",
+      };
+    }catch{}
+  }
+
+  // Higher taxa do not correspond to a single organism. A real, wild
+  // descendant is preferable to fossils, diagrams or arbitrary page images.
+  if(!speciesLike){
+    try{
+      const inat=await searchINaturalistImage(query,{allowDescendant:true});
+      if(inat)return {
+        ...inat,
+        resolver:"inaturalist-taxon-representative",
+        confidence:"MEDIUM",
+        mediaMatch:"REPRESENTATIVE_DESCENDANT_WILD",
+      };
+    }catch{}
+  }
+
+  // Exact occurrence / accepted-name fallback. For living species fieldOnly
+  // above already had priority; specimen media is only considered later.
+  try{
+    const gbif=await searchGbifImage(query,{fieldOnly:false});
+    if(gbif)return {
+      ...gbif,
+      resolver:gbif.resolverHint||"gbif-exact-or-accepted",
+      confidence:"HIGH",
+    };
+  }catch{}
+
+  // Museum specimens are useful for extinct or genuinely obscure taxa, but
+  // should never outrank wild photographs.
   try{
     const specimen=await searchIDigBioImage(query,{rank});
     if(specimen)return {
@@ -605,66 +659,12 @@ export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
   }catch{}
 
   try{
-    const inat=await searchINaturalistImage(query,{allowDescendant});
-    if(inat)return {
-      ...inat,
-      resolver:inat.mediaMatch==="EXACT"?"inaturalist-exact":"inaturalist-representative",
-      confidence:inat.mediaMatch==="EXACT"?"HIGH":"MEDIUM",
-    };
-  }catch{}
-
-  // EOL is intentionally not auto-promoted here yet: its aggregate media can
-  // include illustrations as well as photographs. Keep it available for a
-  // later typed-media pass rather than violating strict real-photo mode.
-
-  try{
     const commons=await searchCommonsImage(query,{exact:true});
     if(commons)return {...commons,resolver:"commons-exact",confidence:"MEDIUM"};
   }catch{}
 
-  // Exact species media simply does not exist online for a large part of the
-  // long tail. In strict-real-media mode we may use a real photographed
-  // representative of the same genus rather than an icon/drawing.
-  if([
-    "species","subspecies","variety","subvariety","form","subform","strain"
-  ].includes(rankKey)){
-    const genus=query.split(/\s+/)[0]?.trim();
-    if(genus&&normalizeScientificName(genus)!==normalizeScientificName(query)){
-      try{
-        const gbif=await searchGbifImage(genus);
-        if(gbif)return {
-          ...gbif,
-          resolver:"gbif-representative-genus",
-          confidence:"MEDIUM",
-          mediaMatch:"REPRESENTATIVE_GENUS",
-          representedTaxon:genus,
-        };
-      }catch{}
-
-      try{
-        const specimen=await searchIDigBioImage(genus,{rank:"genus"});
-        if(specimen)return {
-          ...specimen,
-          resolver:"idigbio-representative-genus",
-          confidence:"MEDIUM",
-          mediaMatch:"REPRESENTATIVE_GENUS",
-          representedTaxon:genus,
-        };
-      }catch{}
-
-      try{
-        const inat=await searchINaturalistImage(genus,{allowDescendant:true});
-        if(inat)return {
-          ...inat,
-          resolver:"inaturalist-representative-genus",
-          confidence:"MEDIUM",
-          mediaMatch:"REPRESENTATIVE_GENUS",
-          representedTaxon:genus,
-        };
-      }catch{}
-    }
-  }
-
+  // No same-genus substitution for species. If the exact species is absent,
+  // keep it unavailable rather than showing the wrong animal.
   return null;
 }
 
