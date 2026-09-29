@@ -5,6 +5,7 @@ const ui={
   state:null,
   media:new Map(),
   mediaLoading:new Set(),
+  definitionIndex:new Map(),
   knowledge:new Map(),
   knowledgeLoading:new Set(),
   collectionFilter:"ALL",
@@ -146,6 +147,46 @@ async function warmMedia(definitions,{rerender=true}={}){
   return true;
 }
 
+function updateMediaNodes(definitionId){
+  const definition=ui.definitionIndex.get(String(definitionId));
+  if(!definition)return;
+  document.querySelectorAll('[data-media-id="'+CSS.escape(String(definitionId))+'"]').forEach(node=>{
+    node.outerHTML=imageMarkup(definition);
+  });
+}
+
+let mediaObserver=null;
+function wireMediaObservers(){
+  mediaObserver?.disconnect();
+  const nodes=[...document.querySelectorAll("[data-media-id]")];
+  if(!nodes.length)return;
+
+  if(!("IntersectionObserver" in window)){
+    nodes.slice(0,12).forEach(async node=>{
+      const id=node.dataset.mediaId;
+      const definition=ui.definitionIndex.get(String(id));
+      if(!definition)return;
+      await loadMedia(definition);
+      updateMediaNodes(id);
+    });
+    return;
+  }
+
+  mediaObserver=new IntersectionObserver(entries=>{
+    for(const entry of entries){
+      if(!entry.isIntersecting)continue;
+      const node=entry.target;
+      mediaObserver.unobserve(node);
+      const id=node.dataset.mediaId;
+      const definition=ui.definitionIndex.get(String(id));
+      if(!definition)continue;
+      loadMedia(definition).then(()=>updateMediaNodes(id)).catch(()=>updateMediaNodes(id));
+    }
+  },{rootMargin:"320px 0px",threshold:0.01});
+
+  nodes.forEach(node=>mediaObserver.observe(node));
+}
+
 function knowledgeQuery(definition){
   if(definition.kind==="origin")return definition.commonName||"Last universal common ancestor";
   return definition.scientificName||definition.commonName;
@@ -182,13 +223,14 @@ function knowledgeSourceButtons(knowledge){
 }
 
 function imageMarkup(definition){
+  ui.definitionIndex.set(String(definition.id),definition);
   const hasResolved=ui.media.has(definition.id);
   const media=getMedia(definition);
   if(media&&media.imageUrl){
     return '<img src="'+esc(media.imageUrl)+'" alt="'+esc(definition.commonName)+'" loading="lazy" draggable="false">';
   }
   if(!hasResolved){
-    return '<div class="art-loading" aria-label="Loading image"><span></span><i></i></div>';
+    return '<div class="art-loading" data-media-id="'+esc(definition.id)+'" aria-label="Loading image"><span></span><i></i></div>';
   }
   const initials=(definition.commonName||definition.scientificName||"?").split(/\s+/).slice(0,2).map(x=>x[0]).join("");
   return '<div class="art-fallback"><span>'+esc(definition.icon||"◌")+'</span><b>'+esc(initials)+'</b><small>No reusable image found</small></div>';
@@ -510,10 +552,6 @@ function renderCollection(){
     listCard(button.dataset.sell);
   });
 
-  const mediaDefinitions=ui.collectionMode==="DISCOVERIES"
-    ? groups.map(group=>group.card.definition)
-    : filtered.map(card=>card.definition);
-  warmMedia(mediaDefinitions);
 }
 
 function openCollectionStack(group){
@@ -568,7 +606,7 @@ function renderMarket(){
     '</section>';
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{event.stopPropagation();buy(button.dataset.buy)});
   document.querySelectorAll("[data-market-filter]").forEach(button=>button.onclick=()=>{ui.marketFilter=button.dataset.marketFilter;renderMarket();wireCommon()});
-  warmMedia(listings.slice(0,18).map(x=>x.card.definition));
+  wireMediaObservers();
 }
 
 async function loadTreePayload(rootId){
@@ -761,7 +799,7 @@ function renderCodex(){
     scheduleCodexSearch(ui.codexQuery);
   });
   document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
-  warmMedia(catalog.slice(0,18));
+  wireMediaObservers();
 }
 
 function wireCommon(){
@@ -784,6 +822,7 @@ function wireCommon(){
       button.textContent=ui.favorites.has(id)?"★":"☆";
     };
   });
+  wireMediaObservers();
 }
 
 async function openPack(){
