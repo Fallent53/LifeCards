@@ -66,6 +66,44 @@ export function migrate() {
   if (!cardColumns.has("definition_json")) {
     db.exec("ALTER TABLE cards ADD COLUMN definition_json TEXT");
   }
+  if (!cardColumns.has("common_name")) {
+    db.exec("ALTER TABLE cards ADD COLUMN common_name TEXT");
+  }
+  if (!cardColumns.has("scientific_name")) {
+    db.exec("ALTER TABLE cards ADD COLUMN scientific_name TEXT");
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS cards_owner_definition_idx ON cards(owner_id, definition_id);
+    CREATE INDEX IF NOT EXISTS cards_owner_rarity_idx ON cards(owner_id, rarity);
+    CREATE INDEX IF NOT EXISTS cards_owner_kind_idx ON cards(owner_id, kind);
+  `);
+
+  const missingNames = db.prepare(
+    "SELECT id, definition_id, definition_json FROM cards WHERE common_name IS NULL OR scientific_name IS NULL LIMIT 5000"
+  ).all();
+  if (missingNames.length) {
+    const updateNames = db.prepare("UPDATE cards SET common_name = ?, scientific_name = ? WHERE id = ?");
+    db.exec("BEGIN");
+    try {
+      for (const row of missingNames) {
+        let definition = null;
+        if (row.definition_json) {
+          try { definition = JSON.parse(row.definition_json); } catch {}
+        }
+        definition ||= resolveDefinition(row.definition_id);
+        updateNames.run(
+          definition?.commonName || row.definition_id,
+          definition?.scientificName || row.definition_id,
+          row.id
+        );
+      }
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 export function ensureUser(id = "explorer", displayName = "Explorer") {
@@ -132,8 +170,8 @@ function issueDefinition(ownerId, definition, finish) {
   const serial = allocateSerial(definition, edition);
   const id = uuid();
   db.prepare(`INSERT INTO cards
-    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at, definition_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at, definition_json, common_name, scientific_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       id,
       definition.id,
@@ -145,7 +183,9 @@ function issueDefinition(ownerId, definition, finish) {
       definition.rarity,
       definition.kind,
       nowMs(),
-      JSON.stringify(definition)
+      JSON.stringify(definition),
+      definition.commonName || definition.id,
+      definition.scientificName || definition.commonName || definition.id
     );
   return hydrateCard(db.prepare("SELECT * FROM cards WHERE id = ?").get(id));
 }
@@ -214,6 +254,146 @@ export function listInventory(userId = "explorer") {
   migrate(); ensureUser(userId);
   return db.prepare("SELECT * FROM cards WHERE owner_id = ? ORDER BY created_at DESC")
     .all(userId).map(hydrateCard);
+}
+
+function collectionWhere(userId, options = {}) {
+  const filter = String(options.filter || "ALL");
+  const query = String(options.query || "").trim();
+  const clauses = ["owner_id = ?"];
+  const params = [userId];
+
+  if (filter === "SPECIES") clauses.push("kind = 'species'");
+  if (filter === "TAXA") clauses.push("kind = 'taxon'");
+  if (filter === "WILD") clauses.push("edition_key = 'WILD CENSUS I'");
+  if (filter === "HOLO") clauses.push("finish = 'HOLO'");
+
+  if (query) {
+    const like = "%" + query + "%";
+    clauses.push("(common_name LIKE ? COLLATE NOCASE OR scientific_name LIKE ? COLLATE NOCASE OR rarity LIKE ? COLLATE NOCASE OR edition_key LIKE ? COLLATE NOCASE)");
+    params.push(like, like, like, like);
+  }
+
+  return { sql: clauses.join(" AND "), params };
+}
+
+function collectionOrder(sort = "RARITY") {
+  if (sort === "NAME") return "common_name COLLATE NOCASE ASC, scientific_name COLLATE NOCASE ASC";
+  if (sort === "NEWEST") return "created_at DESC";
+  return "CASE rarity " +
+    "WHEN 'UNKNOWN' THEN 0 WHEN 'MYTHIC' THEN 1 WHEN 'LEGENDARY' THEN 2 " +
+    "WHEN 'ULTRA_RARE' THEN 3 WHEN 'SUPER_RARE' THEN 4 WHEN 'RARE' THEN 5 " +
+    "WHEN 'UNCOMMON' THEN 6 WHEN 'COMMON' THEN 7 ELSE 99 END ASC, " +
+    "common_name COLLATE NOCASE ASC";
+}
+
+export function getCollectionSummary(userId = "explorer") {
+  migrate(); ensureUser(userId);
+  const row = db.prepare(
+    "SELECT COUNT(*) AS total_cards, " +
+    "COUNT(DISTINCT definition_id) AS unique_discoveries, " +
+    "SUM(CASE WHEN finish = 'HOLO' THEN 1 ELSE 0 END) AS holo_cards, " +
+    "SUM(CASE WHEN edition_key = 'WILD CENSUS I' THEN 1 ELSE 0 END) AS wild_cards " +
+    "FROM cards WHERE owner_id = ?"
+  ).get(userId);
+  return {
+    totalCards: Number(row?.total_cards || 0),
+    uniqueDiscoveries: Number(row?.unique_discoveries || 0),
+    holoCards: Number(row?.holo_cards || 0),
+    wildCards: Number(row?.wild_cards || 0),
+  };
+}
+
+export function listCollectionPage(userId = "explorer", options = {}) {
+  migrate(); ensureUser(userId);
+  const mode = String(options.mode || "DISCOVERIES").toUpperCase();
+  const filter = String(options.filter || "ALL").toUpperCase();
+  const query = String(options.query || "");
+  const sort = String(options.sort || "RARITY").toUpperCase();
+  const limit = Math.max(1, Math.min(60, Number(options.limit) || 36));
+  const offset = Math.max(0, Number(options.offset) || 0);
+  const where = collectionWhere(userId, { filter, query });
+
+  if (mode === "CARDS") {
+    const total = Number(
+      db.prepare("SELECT COUNT(*) AS c FROM cards WHERE " + where.sql)
+        .get(...where.params)?.c || 0
+    );
+    const rows = db.prepare(
+      "SELECT * FROM cards WHERE " + where.sql +
+      " ORDER BY " + collectionOrder(sort) +
+      " LIMIT ? OFFSET ?"
+    ).all(...where.params, limit, offset);
+
+    return {
+      mode: "CARDS",
+      items: rows.map(hydrateCard),
+      total,
+      limit,
+      offset,
+      hasMore: offset + rows.length < total,
+      summary: getCollectionSummary(userId),
+    };
+  }
+
+  const total = Number(
+    db.prepare("SELECT COUNT(DISTINCT definition_id) AS c FROM cards WHERE " + where.sql)
+      .get(...where.params)?.c || 0
+  );
+
+  const groupOrder = sort === "NEWEST"
+    ? "newest_card DESC"
+    : sort === "NAME"
+      ? "common_name COLLATE NOCASE ASC, scientific_name COLLATE NOCASE ASC"
+      : collectionOrder("RARITY");
+
+  const sql =
+    "WITH filtered AS (" +
+      "SELECT * FROM cards WHERE " + where.sql +
+    "), ranked AS (" +
+      "SELECT filtered.*, " +
+      "ROW_NUMBER() OVER (PARTITION BY definition_id ORDER BY " +
+        "CASE WHEN finish = 'HOLO' THEN 0 ELSE 1 END, " +
+        "CASE WHEN edition_key IN ('WILD CENSUS I','FOUNDATION I','FOSSIL RECORD I') THEN 0 ELSE 1 END, " +
+        "serial_number ASC) AS representative_rank, " +
+      "COUNT(*) OVER (PARTITION BY definition_id) AS copy_count, " +
+      "SUM(CASE WHEN finish = 'HOLO' THEN 1 ELSE 0 END) OVER (PARTITION BY definition_id) AS holo_count, " +
+      "SUM(CASE WHEN edition_key = 'WILD CENSUS I' THEN 1 ELSE 0 END) OVER (PARTITION BY definition_id) AS wild_count, " +
+      "MIN(serial_number) OVER (PARTITION BY definition_id) AS lowest_serial, " +
+      "MAX(created_at) OVER (PARTITION BY definition_id) AS newest_card " +
+      "FROM filtered" +
+    ") " +
+    "SELECT * FROM ranked WHERE representative_rank = 1 " +
+    "ORDER BY " + groupOrder + " LIMIT ? OFFSET ?";
+
+  const rows = db.prepare(sql).all(...where.params, limit, offset);
+  return {
+    mode: "DISCOVERIES",
+    items: rows.map((row) => ({
+      definitionId: row.definition_id,
+      copies: Number(row.copy_count || 0),
+      holoCount: Number(row.holo_count || 0),
+      wildCount: Number(row.wild_count || 0),
+      lowestSerial: Number(row.lowest_serial || 0),
+      newest: Number(row.newest_card || 0),
+      card: hydrateCard(row),
+    })),
+    total,
+    limit,
+    offset,
+    hasMore: offset + rows.length < total,
+    summary: getCollectionSummary(userId),
+  };
+}
+
+export function listDefinitionCopies(userId = "explorer", definitionId, limit = 100) {
+  migrate(); ensureUser(userId);
+  const safeLimit = Math.max(1, Math.min(250, Number(limit) || 100));
+  return db.prepare(
+    "SELECT * FROM cards WHERE owner_id = ? AND definition_id = ? " +
+    "ORDER BY CASE WHEN finish = 'HOLO' THEN 0 ELSE 1 END, " +
+    "CASE WHEN edition_key IN ('WILD CENSUS I','FOUNDATION I','FOSSIL RECORD I') THEN 0 ELSE 1 END, " +
+    "serial_number ASC LIMIT ?"
+  ).all(userId, String(definitionId), safeLimit).map(hydrateCard);
 }
 
 export function listMarket() {
@@ -300,11 +480,13 @@ export function getOriginStatus() {
 export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
   migrate();
   const user = syncAccrual(userId, config);
-  const inventory = listInventory(userId);
+  const inventory = db.prepare("SELECT * FROM cards WHERE owner_id = ? ORDER BY created_at DESC LIMIT 12")
+    .all(userId).map(hydrateCard);
   const nextPackInMs = user.pack_balance >= config.maxStoredPacks ? 0 : Math.max(0, config.packIntervalMs - (user.now - user.pack_anchor_at));
   return {
     user: { id: user.id, displayName: user.display_name, coins: Number(user.coins), packs: Number(user.pack_balance), maxPacks: config.maxStoredPacks, nextPackInMs },
     inventory,
+    collectionSummary: getCollectionSummary(userId),
     market: listMarket(),
     catalog: publicCatalog(),
     supplies: listSupplies(),
