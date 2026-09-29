@@ -1,10 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getWikipediaFileMetadata, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getWikipediaFileMetadata, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v6";
+const CACHE_SCHEMA_VERSION = "v7";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -29,7 +29,7 @@ function readPersistentCache(query, lang) {
 
     const payload = JSON.parse(row.payload_json);
     const hasMedia = Boolean(payload?.media?.imageUrl);
-    const ttl = hasMedia ? CACHE_TTL_MS : Math.min(CACHE_TTL_MS, 24 * 60 * 60 * 1000);
+    const ttl = hasMedia ? CACHE_TTL_MS : Math.min(CACHE_TTL_MS, 15 * 60 * 1000);
     if (Date.now() - Number(row.fetched_at) >= ttl) return null;
 
     return payload;
@@ -191,16 +191,35 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
       confidence:exactTaxonIdentity?"HIGH":"MEDIUM",
       run:async () => {
         if(!page?.pageimage)return null;
-        return (
-          await getCommonsFileMetadata(page.pageimage) ||
-          await getWikipediaFileMetadata(page.pageimage,lang)
-        );
+
+        try {
+          const local = await getWikipediaFileMetadata(page.pageimage,lang);
+          if(local)return local;
+        } catch {}
+
+        try {
+          const commons = await getCommonsFileMetadata(page.pageimage);
+          if(commons)return commons;
+        } catch {}
+
+        return wikipediaThumbnailFallback(page,lang);
       },
     },
     {
       resolver:"wikidata-p18",
       confidence:exactTaxonIdentity?"HIGH":"MEDIUM",
-      run:async () => wikidataImage ? getCommonsFileMetadata(wikidataImage) : null,
+      run:async () => {
+        if(!wikidataImage)return null;
+        try {
+          const commons=await getCommonsFileMetadata(wikidataImage);
+          if(commons)return commons;
+        } catch {}
+        try {
+          return await getWikipediaFileMetadata(wikidataImage,lang);
+        } catch {
+          return null;
+        }
+      },
     },
     {
       resolver:"gbif-exact",
