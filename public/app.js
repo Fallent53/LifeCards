@@ -65,6 +65,7 @@ let treeSearchTimer=null;
 let codexSearchTimer=null;
 let collectionSearchTimer=null;
 let mediaBatchTimer=null;
+let mediaBatchInFlight=0;
 const mediaBatchQueue=new Set();
 
 const RARITY={
@@ -234,9 +235,19 @@ async function flushMediaBatch(){
   clearTimeout(mediaBatchTimer);
   mediaBatchTimer=null;
 
-  const ids=[...mediaBatchQueue].slice(0,12);
+  if(mediaBatchInFlight>=2){
+    mediaBatchTimer=setTimeout(flushMediaBatch,40);
+    return;
+  }
+
+  const ids=[...mediaBatchQueue].slice(0,6);
   if(!ids.length)return;
   ids.forEach(id=>mediaBatchQueue.delete(id));
+  mediaBatchInFlight+=1;
+
+  if(mediaBatchQueue.size){
+    mediaBatchTimer=setTimeout(flushMediaBatch,20);
+  }
 
   const entries=ids.map(id=>{
     const definition=ui.definitionIndex.get(String(id));
@@ -255,13 +266,13 @@ async function flushMediaBatch(){
   try{
     const result=await api("/api/knowledge/batch",{
       method:"POST",
-      body:JSON.stringify({lang:"en",entries})
+      body:JSON.stringify({lang:"en",entries}),
+      timeoutMs:8000
     });
     const values=result.knowledge||{};
 
     for(const entry of entries){
       const knowledge=values[entry.id]||null;
-      if(knowledge)ui.knowledge.set(entry.id,knowledge);
       ui.media.set(entry.id,knowledge?.media||false);
       updateMediaNodes(entry.id);
     }
@@ -272,8 +283,9 @@ async function flushMediaBatch(){
     }
   }finally{
     entries.forEach(entry=>ui.mediaLoading.delete(entry.id));
-    if(mediaBatchQueue.size){
-      mediaBatchTimer=setTimeout(flushMediaBatch,45);
+    mediaBatchInFlight=Math.max(0,mediaBatchInFlight-1);
+    if(mediaBatchQueue.size&&!mediaBatchTimer){
+      mediaBatchTimer=setTimeout(flushMediaBatch,20);
     }
   }
 }
