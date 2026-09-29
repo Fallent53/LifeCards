@@ -31,6 +31,10 @@ const ui={
   codexQuery:"",
   codexResults:[],
   codexSearchLoading:false,
+  codexRank:"ALL",
+  codexOwned:new Set(),
+  taxonomyContext:new Map(),
+  taxonomyContextLoading:new Set(),
   treeQuery:"",
   treeSearchResults:[],
   treePayload:null,
@@ -276,6 +280,36 @@ function wireMediaObservers(){
 function knowledgeQuery(definition){
   if(definition.kind==="origin")return definition.commonName||"Last universal common ancestor";
   return definition.scientificName||definition.commonName;
+}
+
+async function loadTaxonomyContext(definition){
+  if(!definition)return null;
+  const key=String(definition.id);
+  if(ui.taxonomyContext.has(key))return ui.taxonomyContext.get(key);
+  if(ui.taxonomyContextLoading.has(key))return null;
+  ui.taxonomyContextLoading.add(key);
+
+  try{
+    const query=definition.scientificName||definition.commonName;
+    const result=await api("/api/taxonomy/resolve?q="+encodeURIComponent(query));
+    const value={
+      taxon:result.taxon||null,
+      path:result.path||[],
+      taxonomy:result.taxonomy||null,
+    };
+    ui.taxonomyContext.set(key,value);
+    return value;
+  }catch{
+    ui.taxonomyContext.set(key,false);
+    return null;
+  }finally{
+    ui.taxonomyContextLoading.delete(key);
+  }
+}
+
+function taxonomyContextFor(definition){
+  const value=ui.taxonomyContext.get(String(definition.id));
+  return value&&value!==false?value:null;
 }
 
 async function loadKnowledge(definition){
@@ -1113,53 +1147,134 @@ function renderTree(){
   }
 }
 
+async function refreshCodexOwnership(definitions){
+  const names=[...new Set(definitions.map(d=>d?.scientificName).filter(Boolean))].slice(0,200);
+  if(!names.length){
+    ui.codexOwned=new Set();
+    return;
+  }
+  try{
+    const result=await api("/api/collection/owned",{
+      method:"POST",
+      body:JSON.stringify({scientificNames:names})
+    });
+    ui.codexOwned=new Set((result.scientificNames||[]).map(name=>String(name).toLowerCase()));
+  }catch{
+    ui.codexOwned=new Set();
+  }
+}
+
+function codexRankMatches(definition){
+  if(ui.codexRank==="ALL")return true;
+  const rank=String(definition.rank||definition.kind||"").toLowerCase();
+  if(ui.codexRank==="SPECIES")return rank==="species";
+  if(ui.codexRank==="GENUS")return rank==="genus"||rank==="subgenus";
+  if(ui.codexRank==="FAMILY")return rank.includes("family")||rank==="tribe"||rank==="subtribe";
+  if(ui.codexRank==="HIGHER")return !["species","genus","subgenus","family","subfamily","superfamily","tribe","subtribe"].includes(rank);
+  return true;
+}
+
 function scheduleCodexSearch(query){
   clearTimeout(codexSearchTimer);
   const q=String(query||"").trim();
+
   if(q.length<2){
     ui.codexResults=[];
     ui.codexSearchLoading=false;
+    refreshCodexOwnership(ui.state.catalog||[]).finally(()=>{
+      if(ui.view==="codex")renderCodex();
+    });
     renderCodex();
     return;
   }
+
   ui.codexSearchLoading=true;
+  renderCodex();
+
   codexSearchTimer=setTimeout(async()=>{
     try{
-      const result=await api("/api/taxonomy/search?q="+encodeURIComponent(q)+"&limit=60");
+      const result=await api("/api/taxonomy/search?q="+encodeURIComponent(q)+"&limit=80");
       if(ui.codexQuery.trim()!==q)return;
       ui.codexResults=(result.results||[]).map(taxonToDefinition);
       ui.taxonomyStatus=result.taxonomy||ui.taxonomyStatus;
+      await refreshCodexOwnership(ui.codexResults);
     }catch{
       ui.codexResults=[];
+      ui.codexOwned=new Set();
     }finally{
       ui.codexSearchLoading=false;
       if(ui.view==="codex")renderCodex();
     }
-  },240);
+  },210);
+}
+
+function codexRowHtml(definition){
+  const owned=ui.codexOwned.has(String(definition.scientificName||"").toLowerCase());
+  const speciesCount=Number(definition.childCount||0);
+  const rank=definition.rank||definition.kind||"unranked";
+  return '<article class="codex-row '+(owned?"owned":"")+'" data-definition="'+esc(definition.id)+'">'+
+    '<div class="codex-thumb">'+imageMarkup(definition)+(owned?'<span class="codex-owned">OWNED</span>':"")+'</div>'+
+    '<div class="codex-copy">'+
+      '<div class="codex-row-meta"><span class="codex-type">'+esc(definition.kind)+' · '+esc(rank)+'</span><span>'+esc((RARITY[definition.rarity]||{label:definition.rarity}).label||definition.rarity)+'</span></div>'+
+      '<h3>'+esc(definition.commonName)+'</h3>'+
+      '<em>'+esc(definition.scientificName)+'</em>'+
+      '<p>'+esc(cardSummary(definition))+'</p>'+
+    '</div>'+
+    '<div class="codex-row-side">'+
+      (definition.childCount?'<b>'+formatNumber(definition.childCount)+'</b><small>direct branches</small>':'<b>→</b><small>open record</small>')+
+    '</div>'+
+  '</article>';
 }
 
 function renderCodex(){
   const q=ui.codexQuery.trim();
-  const local=ui.state.catalog;
-  const catalog=q.length>=2?ui.codexResults:local;
+  const base=q.length>=2?ui.codexResults:(ui.state.catalog||[]);
+  const catalog=base.filter(codexRankMatches);
   const status=ui.taxonomyStatus;
+  const rankFilters=["ALL","SPECIES","GENUS","FAMILY","HIGHER"];
+
   main.innerHTML=
-    '<section class="codex-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Search the complete taxonomy locally after a Catalogue of Life import. Images and descriptions resolve lazily through Wikipedia/Wikimedia.</p></div>'+
-      '<div class="collection-toolbar codex-toolbar"><label class="search-box"><span>⌕</span><input id="codexSearch" autocomplete="off" placeholder="Search any animal scientific name…" value="'+esc(ui.codexQuery)+'"></label><span class="result-count">'+(ui.codexSearchLoading?"Searching…":catalog.length+" shown")+'</span></div>'+
-      '<div class="codex-dataset-banner '+(status?.ready?"ready":"seed")+'"><b>'+esc(taxonomySummary(status))+'</b><small>'+(status?.mode==="catalogue-of-life-live"?"Searching the public ChecklistBank API; local import is optional for speed and offline use.":status?.ready?"Search is querying the local Catalogue of Life database.":"Using the small seed catalogue until Catalogue of Life is reachable.")+'</small></div>'+
-      '<div class="codex-grid">'+(catalog.length?catalog.map(d=>
-        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rank||d.rarity||"")+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(cardSummary(d))+'</p></div><span class="codex-arrow">→</span></article>'
-      ).join(""):'<div class="empty-state">'+(ui.codexSearchLoading?"Searching the taxonomy…":"No taxon found.")+'</div>')+'</div>'+
+    '<section class="codex-page scientific-codex">'+
+      '<div class="codex-hero">'+
+        '<div><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Search the scientific backbone behind LifeCards. Taxonomy is local; descriptions and reusable media are resolved only when needed.</p></div>'+
+        '<div class="codex-hero-stat"><b>'+formatNumber(status?.taxonCount||base.length)+'</b><small>taxa indexed</small><em>'+esc(status?.fullLifeMap?"Full Life Map":status?.mapScope||status?.scope||"Seed")+'</em></div>'+
+      '</div>'+
+      '<div class="codex-command">'+
+        '<label class="search-box codex-search"><span>⌕</span><input id="codexSearch" autocomplete="off" placeholder="Scientific or common name…" value="'+esc(ui.codexQuery)+'"></label>'+
+        '<div class="codex-rank-filters">'+rankFilters.map(rank=>'<button data-codex-rank="'+rank+'" class="'+(ui.codexRank===rank?"active":"")+'">'+rank+'</button>').join("")+'</div>'+
+      '</div>'+
+      '<div class="codex-dataset-banner '+(status?.ready?"ready":"seed")+'">'+
+        '<div><i></i><b>'+esc(taxonomySummary(status))+'</b></div>'+
+        '<small>'+(status?.fullLifeMap?"Tree search uses the optional full-life local snapshot; pack drops remain on the separate gameplay taxonomy.":status?.ready?"Search is querying the local Catalogue of Life snapshot.":"Seed data is active until a local Catalogue of Life database is built.")+'</small>'+
+      '</div>'+
+      '<div class="codex-result-bar"><span>'+(ui.codexSearchLoading?"Searching taxonomy…":formatNumber(catalog.length)+" results shown")+'</span><small>Images load only near the viewport</small></div>'+
+      '<div class="codex-grid">'+
+        (ui.codexSearchLoading&&!catalog.length
+          ?Array.from({length:8},()=>'<div class="codex-skeleton"></div>').join("")
+          :(catalog.length?catalog.map(codexRowHtml).join(""):'<div class="empty-state">No taxon found for this filter.</div>'))+
+      '</div>'+
     '</section>';
 
-  const codexSearch=document.getElementById("codexSearch");
-  codexSearch?.addEventListener("input",event=>{
+  const input=document.getElementById("codexSearch");
+  input?.addEventListener("input",event=>{
     ui.codexQuery=event.target.value;
     scheduleCodexSearch(ui.codexQuery);
   });
+
+  document.querySelectorAll("[data-codex-rank]").forEach(button=>button.onclick=()=>{
+    ui.codexRank=button.dataset.codexRank;
+    renderCodex();
+    wireCommon();
+  });
+
   document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
   wireMediaObservers();
+
+  if(!q&&ui.codexOwned.size===0&&base.length){
+    queueMicrotask(()=>refreshCodexOwnership(base).then(()=>{
+      if(ui.view==="codex")renderCodex();
+    }));
+  }
 }
 
 function wireCommon(){
