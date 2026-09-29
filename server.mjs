@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance, getAuditHead, getPackAuditForUser } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
-import { getKnowledge, getFastMediaBatch } from "./src/knowledge.mjs";
+import { getKnowledge, getKnowledgeBatch, getFastMediaBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree, getRepresentativeMediaQueries } from "./src/taxonomy-store.mjs";
 import { remoteSearchTaxa, remoteGetTaxon, remoteGetChildren, remoteGetPath, remoteGetSubtree, remoteStatusHint } from "./src/checklistbank.mjs";
 
@@ -222,6 +222,21 @@ async function api(request, response, url) {
           ),
         }));
       const knowledge = await getFastMediaBatch(entries, { lang });
+      return json(response, 200, { knowledge });
+    }
+    if (request.method === "POST" && url.pathname === "/api/knowledge/deep-batch") {
+      const input = await bodyJson(request);
+      const lang = String(input.lang || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
+      const entries = (Array.isArray(input.entries) ? input.entries.slice(0, 4) : [])
+        .map((entry)=>({
+          ...entry,
+          fallbackQueries:getRepresentativeMediaQueries(
+            entry?.id,
+            entry?.scientificName||entry?.query||"",
+            6
+          ),
+        }));
+      const knowledge = await getKnowledgeBatch(entries, { lang, concurrency: 2 });
       return json(response, 200, { knowledge });
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
