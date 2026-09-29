@@ -501,11 +501,15 @@ export function placeAuctionBid(userId, auctionId, amount) {
         .run(Number(auction.highest_bid), auction.highest_bidder_id);
     }
 
+    const antiSnipeEndsAt = Number(auction.ends_at) - nowMs() < 2 * 60 * 1000
+      ? nowMs() + 2 * 60 * 1000
+      : Number(auction.ends_at);
+
     db.prepare(`
       UPDATE auctions
-      SET highest_bid = ?, highest_bidder_id = ?
+      SET highest_bid = ?, highest_bidder_id = ?, ends_at = ?
       WHERE id = ?
-    `).run(amount, userId, auctionId);
+    `).run(amount, userId, antiSnipeEndsAt, auctionId);
     db.prepare(`
       INSERT INTO auction_bids (id, auction_id, bidder_id, amount, created_at)
       VALUES (?, ?, ?, ?, ?)
@@ -530,6 +534,30 @@ export function createListing(userId, cardId, price) {
   db.prepare("INSERT INTO listings (id, card_id, seller_id, price, status, created_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?)")
     .run(id, cardId, userId, price, nowMs());
   return listMarket().find((listing) => listing.id === id);
+}
+
+export function cancelListing(userId, listingId) {
+  migrate();
+  ensureUser(userId);
+  const listing = db.prepare(
+    "SELECT * FROM listings WHERE id = ? AND seller_id = ? AND status = 'ACTIVE'"
+  ).get(listingId, userId);
+  if (!listing) throw new Error("Active listing not found");
+  db.prepare("UPDATE listings SET status = 'CANCELLED' WHERE id = ?").run(listingId);
+  return { id: listingId, status: "CANCELLED" };
+}
+
+export function cancelAuction(userId, auctionId) {
+  migrate();
+  ensureUser(userId);
+  const auction = db.prepare(
+    "SELECT * FROM auctions WHERE id = ? AND seller_id = ? AND status = 'ACTIVE'"
+  ).get(auctionId, userId);
+  if (!auction) throw new Error("Active auction not found");
+  if (auction.highest_bidder_id) throw new Error("An auction with bids cannot be cancelled");
+  db.prepare("UPDATE auctions SET status = 'CANCELLED', settled_at = ? WHERE id = ?")
+    .run(nowMs(), auctionId);
+  return { id: auctionId, status: "CANCELLED" };
 }
 
 export function buyListing(userId, listingId) {
