@@ -429,7 +429,7 @@ function taxonomySummary(status){
   if(status.ready){
     const taxa=status.taxonCount!=null?formatNumber(status.taxonCount)+" taxa":"local taxonomy";
     const species=status.speciesCount!=null?" · "+formatNumber(status.speciesCount)+" species":"";
-    const scope=status.fullLifeMap?"Full Life Map":(status.mapScope||status.scope||"Animalia");
+    const scope=status.fullLifeMap?"Full Life Map":(status.mapScope||status.scope||"Eukaryota");
     return scope+" · "+taxa+species;
   }
   return "Seed tree · run npm run sync:col";
@@ -598,8 +598,8 @@ function renderPacks(){
         '</div>'+
         '<aside class="drop-world-status">'+
           '<span class="eyebrow">LIVE ARCHIVE</span>'+
-          '<div class="world-status-line"><i class="'+(taxonomy?.dropPoolReady?"live":"seed")+'"></i><div><b>'+(taxonomy?.dropPoolReady?formatNumber(indexedCards)+" indexed pulls":"Seed drop pool")+'</b><small>'+(taxonomy?.dropPoolReady?esc(taxonomy.dropScope||"Animalia")+" gameplay taxonomy":"Build Catalogue of Life with npm run sync:col")+'</small></div></div>'+
-          '<div class="world-status-line"><i class="'+(taxonomy?.fullLifeMap?"live":"seed")+'"></i><div><b>'+(taxonomy?.fullLifeMap?"Full Life Map":"Animalia map")+'</b><small>'+(taxonomy?.fullLifeMap?"Bacteria · Archaea · Eukaryota":"Optional full map: npm run sync:map")+'</small></div></div>'+
+          '<div class="world-status-line"><i class="'+(taxonomy?.dropPoolReady?"live":"seed")+'"></i><div><b>'+(taxonomy?.dropPoolReady?formatNumber(indexedCards)+" indexed pulls":"Seed drop pool")+'</b><small>'+(taxonomy?.dropPoolReady?esc(taxonomy.dropScope||"Eukaryota")+" gameplay taxonomy":"Build Catalogue of Life with npm run sync:col")+'</small></div></div>'+
+          '<div class="world-status-line"><i class="'+(taxonomy?.fullLifeMap?"live":"seed")+'"></i><div><b>'+(taxonomy?.fullLifeMap?"Full Life Map":"Eukaryota map")+'</b><small>'+(taxonomy?.fullLifeMap?"Bacteria · Archaea · Eukaryota":"Optional full map: npm run sync:map")+'</small></div></div>'+
         '</aside>'+
       '</div>'+
 
@@ -1252,7 +1252,7 @@ function renderTree(){
         '<div id="treeBreadcrumb" class="tree-breadcrumb"></div>'+
       '</div>'+
       '<div id="radialTreeMap" class="radial-tree-map loading"><div class="radial-loading"><span></span><b>Building phylogenetic map…</b></div></div>'+
-      '<div class="tree-map-foot"><span>Map: '+esc(status?.fullLifeMap?"Catalogue of Life · full life":status?.ready?"Catalogue of Life · "+(status.mapScope||status.scope||"Animalia"):"LifeCards seed taxonomy")+'</span><span>Drops: '+esc(status?.dropPoolReady?(status.dropScope||"Animalia")+" indexed pool":"seed pool")+' · External links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
+      '<div class="tree-map-foot"><span>Map: '+esc(status?.fullLifeMap?"Catalogue of Life · full life":status?.ready?"Catalogue of Life · "+(status.mapScope||status.scope||"Eukaryota"):"LifeCards seed taxonomy")+'</span><span>Drops: '+esc(status?.dropPoolReady?(status.dropScope||"Eukaryota")+" indexed pool":"seed pool")+' · External links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
     '</section>';
 
   document.getElementById("originBeacon")?.addEventListener("click",()=>openDefinition("luca"));
