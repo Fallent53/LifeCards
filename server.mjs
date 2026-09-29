@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { claimPack, createListing, buyListing, getState } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge } from "./src/knowledge.mjs";
+import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
@@ -73,8 +74,41 @@ async function api(request, response, url) {
       const knowledge = await getKnowledge(query, { lang });
       return json(response, 200, { knowledge });
     }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
+      return json(response, 200, { taxonomy: taxonomyStatus() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/search") {
+      const query = url.searchParams.get("q") || "";
+      const limit = Number(url.searchParams.get("limit") || 30);
+      return json(response, 200, { results: searchTaxa(query, limit), taxonomy: taxonomyStatus() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/taxon") {
+      const id = url.searchParams.get("id") || "";
+      return json(response, 200, { taxon: getTaxon(id), path: getPath(id), taxonomy: taxonomyStatus() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/children") {
+      const id = url.searchParams.get("id") || "";
+      const limit = Number(url.searchParams.get("limit") || 120);
+      return json(response, 200, { children: getChildren(id, limit), taxonomy: taxonomyStatus() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/path") {
+      const id = url.searchParams.get("id") || "";
+      return json(response, 200, { path: getPath(id), taxonomy: taxonomyStatus() });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/subtree") {
+      const root = url.searchParams.get("root") || "";
+      const depth = Math.max(1, Math.min(5, Number(url.searchParams.get("depth") || 3)));
+      const childLimit = Math.max(6, Math.min(100, Number(url.searchParams.get("childLimit") || 42)));
+      const nodeLimit = Math.max(50, Math.min(1400, Number(url.searchParams.get("nodeLimit") || 850)));
+      return json(response, 200, getSubtree(root, { depth, childLimit, nodeLimit }));
+    }
     if (request.method === "GET" && url.pathname === "/api/health") {
-      return json(response, 200, { ok: true, service: "LifeCards", time: new Date().toISOString() });
+      return json(response, 200, {
+        ok: true,
+        service: "LifeCards",
+        taxonomy: taxonomyStatus(),
+        time: new Date().toISOString(),
+      });
     }
     return json(response, 404, { error: "Not found" });
   } catch (error) {
