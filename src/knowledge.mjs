@@ -1,10 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v8";
+const CACHE_SCHEMA_VERSION = "v9";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -507,7 +507,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     const query=String(entry?.query??"").trim();
     if(!id||!query||seen.has(id))continue;
     seen.add(id);
-    normalized.push({id,query});
+    normalized.push({id,query,rank:String(entry?.rank||"")});
   }
   if(!normalized.length)return {};
 
@@ -668,17 +668,30 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     }
   }
 
-  // Bulk audits deliberately cap expensive per-item fallbacks. Wikimedia
-  // batches are the scalable first pass; unresolved taxa can be retried later.
-  const fallbackBudget=Math.min(4,fallback.length);
-  for(let index=0;index<fallbackBudget;index+=1){
-    const entry=fallback[index];
+  // Every unresolved taxon now gets a real-media pass. The previous audit
+  // only processed four fallbacks per 40-row batch, creating false NO_IMAGE
+  // results for the remaining rows.
+  for(const entry of fallback){
     try{
-      output[entry.id]=await getKnowledge(entry.query,{lang});
+      const media=await searchSupplementalRealMedia(entry.query,{rank:entry.rank});
+      output[entry.id]=media?{
+        query:entry.query,
+        wikipedia:null,
+        wikidata:null,
+        taxonomy:{ncbiTaxId:null,ncbiUrl:null,lifemapUrl:null},
+        media,
+        sources:[media.source].filter(Boolean),
+        sourceStatus:{
+          wikipedia:"unavailable",
+          wikidata:"unavailable",
+          media:"ok",
+          lifemap:"unresolved",
+        },
+        resolvedAt:new Date().toISOString(),
+      }:null;
     }catch{
       output[entry.id]=null;
     }
-    await new Promise((resolve)=>setTimeout(resolve,350));
   }
 
   return output;
