@@ -6,11 +6,17 @@ const ui={
   media:new Map(),
   mediaLoading:new Set(),
   definitionIndex:new Map(),
+  cardIndex:new Map(),
   knowledge:new Map(),
   knowledgeLoading:new Set(),
   collectionFilter:"ALL",
   collectionMode:"DISCOVERIES",
   collectionSort:"RARITY",
+  collectionData:null,
+  collectionLoading:false,
+  collectionPage:0,
+  collectionPageSize:30,
+  collectionRequestToken:0,
   marketFilter:"ALL",
   query:"",
   codexQuery:"",
@@ -38,6 +44,7 @@ const toast=document.getElementById("toast");
 let radialMap=null;
 let treeSearchTimer=null;
 let codexSearchTimer=null;
+let collectionSearchTimer=null;
 
 const RARITY={
   COMMON:{label:"Common",short:"C"},
@@ -293,6 +300,7 @@ function taxonomySummary(status){
 
 function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
   const d=card.definition||card;
+  if(card.id)ui.cardIndex.set(String(card.id),card);
   const rarity=RARITY[d.rarity]||{label:d.rarity,short:"?"};
   const media=getMedia(d);
   const classes=[
@@ -378,10 +386,11 @@ function sortCollectionGroups(groups){
 
 function collectionStackHtml(group){
   const card=group.card;
+  const copyCount=Array.isArray(group.copies)?group.copies.length:Number(group.copies||0);
   return '<article class="collection-stack" data-stack="'+esc(group.definitionId)+'">'+
-    '<div class="stack-layers"><i></i><i></i>'+cardHtml(card,{compact:true})+'</div>'+
+    '<div class="stack-layers"><i></i><i></i>'+cardHtml(card,{compact:true,interactive:false})+'</div>'+
     '<div class="stack-badges">'+
-      '<span class="copy-count">×'+group.copies.length+'</span>'+
+      '<span class="copy-count">×'+copyCount+'</span>'+
       (group.holoCount?'<span class="stack-holo">✦ '+group.holoCount+' Holo</span>':"")+
       (group.wildCount?'<span class="stack-wild">'+group.wildCount+' Wild</span>':"")+
     '</div>'+
@@ -464,39 +473,69 @@ function renderPacks(){
   warmMedia(recent.map(c=>c.definition));
 }
 
-function renderCollection(){
-  const inventory=ui.state.inventory;
-  const q=ui.query.trim().toLowerCase();
-  const filtered=inventory.filter(card=>{
-    const d=card.definition;
-    const queryOk=!q||[d.commonName,d.scientificName,d.rarity,card.edition].some(v=>String(v||"").toLowerCase().includes(q));
-    if(!queryOk)return false;
-    if(ui.collectionFilter==="ALL")return true;
-    if(ui.collectionFilter==="HOLO")return card.finish==="HOLO";
-    if(ui.collectionFilter==="WILD")return card.edition==="WILD CENSUS I";
-    if(ui.collectionFilter==="TAXA")return card.kind==="taxon";
-    if(ui.collectionFilter==="SPECIES")return card.kind==="species";
-    return true;
-  });
 
-  const uniqueCount=new Set(inventory.map(c=>c.definitionId)).size;
-  const holoCount=inventory.filter(c=>c.finish==="HOLO").length;
-  const wildCount=inventory.filter(c=>c.edition==="WILD CENSUS I").length;
+function collectionQueryString(){
+  const params=new URLSearchParams({
+    mode:ui.collectionMode,
+    filter:ui.collectionFilter,
+    q:ui.query.trim(),
+    sort:ui.collectionSort,
+    limit:String(ui.collectionPageSize),
+    offset:String(ui.collectionPage*ui.collectionPageSize),
+  });
+  return params.toString();
+}
+
+async function loadCollectionData({resetPage=false}={}){
+  if(resetPage)ui.collectionPage=0;
+  const token=++ui.collectionRequestToken;
+  ui.collectionLoading=true;
+  renderCollection();
+
+  try{
+    const result=await api("/api/collection?"+collectionQueryString());
+    if(token!==ui.collectionRequestToken)return;
+    ui.collectionData=result;
+    ui.collectionLoading=false;
+    renderCollection();
+    wireCommon();
+  }catch(error){
+    if(token!==ui.collectionRequestToken)return;
+    ui.collectionLoading=false;
+    flash(error.message);
+    renderCollection();
+    wireCommon();
+  }
+}
+
+function renderCollection(){
+  const data=ui.collectionData;
+  const summary=data?.summary||ui.state.collectionSummary||{
+    totalCards:ui.state.inventory?.length||0,
+    uniqueDiscoveries:new Set((ui.state.inventory||[]).map(c=>c.definitionId)).size,
+    holoCards:(ui.state.inventory||[]).filter(c=>c.finish==="HOLO").length,
+    wildCards:(ui.state.inventory||[]).filter(c=>c.edition==="WILD CENSUS I").length,
+  };
   const filters=["ALL","SPECIES","TAXA","WILD","HOLO"];
-  const groups=sortCollectionGroups(groupCollection(filtered));
+  const items=data?.items||[];
   const displayItems=ui.collectionMode==="DISCOVERIES"
-    ? groups.map(collectionStackHtml).join("")
-    : filtered.map(c=>cardHtml(c,{compact:true,showSell:true})).join("");
+    ? items.map(collectionStackHtml).join("")
+    : items.map(c=>cardHtml(c,{compact:true,showSell:true})).join("");
+
+  const total=data?.total??summary.uniqueDiscoveries;
+  const start=total?ui.collectionPage*ui.collectionPageSize+1:0;
+  const end=Math.min(total,(ui.collectionPage+1)*ui.collectionPageSize);
+  const pageCount=Math.max(1,Math.ceil(total/ui.collectionPageSize));
 
   main.innerHTML=
     '<section class="library-page">'+
       '<div class="collection-hero">'+
         '<div><span class="eyebrow">YOUR ARCHIVE</span><h1>Collection</h1><p>Your biological archive, organized as discoveries instead of duplicate clutter.</p></div>'+
         '<div class="collection-stats">'+
-          '<div><b>'+formatNumber(uniqueCount)+'</b><small>Discoveries</small></div>'+
-          '<div><b>'+formatNumber(inventory.length)+'</b><small>Total cards</small></div>'+
-          '<div><b>'+formatNumber(holoCount)+'</b><small>Holo</small></div>'+
-          '<div><b>'+formatNumber(wildCount)+'</b><small>Wild</small></div>'+
+          '<div><b>'+formatNumber(summary.uniqueDiscoveries)+'</b><small>Discoveries</small></div>'+
+          '<div><b>'+formatNumber(summary.totalCards)+'</b><small>Total cards</small></div>'+
+          '<div><b>'+formatNumber(summary.holoCards)+'</b><small>Holo</small></div>'+
+          '<div><b>'+formatNumber(summary.wildCards)+'</b><small>Wild</small></div>'+
         '</div>'+
       '</div>'+
       '<div class="collection-toolbar album-toolbar">'+
@@ -510,40 +549,43 @@ function renderCollection(){
         '<div class="filter-row">'+filters.map(f=>'<button data-filter="'+f+'" class="'+(ui.collectionFilter===f?"active":"")+'">'+f+'</button>').join("")+'</div>'+
         '<div class="collection-sort"><span>Sort</span><button data-sort="RARITY" class="'+(ui.collectionSort==="RARITY"?"active":"")+'">Rarity</button><button data-sort="NAME" class="'+(ui.collectionSort==="NAME"?"active":"")+'">Name</button><button data-sort="NEWEST" class="'+(ui.collectionSort==="NEWEST"?"active":"")+'">Newest</button></div>'+
       '</div>'+
-      '<div class="collection-result-line"><span>'+(ui.collectionMode==="DISCOVERIES"?groups.length:filtered.length)+' shown</span><small>'+formatNumber(uniqueCount)+' unique taxa/species owned</small></div>'+
-      '<div class="card-grid collection-grid '+(ui.collectionMode==="DISCOVERIES"?"discovery-grid":"all-cards-grid")+'">'+
-        (displayItems||'<div class="empty-state">No cards match this filter.</div>')+
+      '<div class="collection-result-line"><span>'+(ui.collectionLoading?"Loading…":(start?start+"–"+end+" of "+formatNumber(total):"0 shown"))+'</span><small>'+formatNumber(summary.uniqueDiscoveries)+' unique taxa/species owned</small></div>'+
+      '<div class="card-grid collection-grid '+(ui.collectionMode==="DISCOVERIES"?"discovery-grid":"all-cards-grid")+' '+(ui.collectionLoading?"is-loading":"")+'">'+
+        (ui.collectionLoading&&!items.length
+          ?Array.from({length:12},()=>'<div class="collection-card-skeleton"></div>').join("")
+          :(displayItems||'<div class="empty-state">No cards match this filter.</div>'))+
+      '</div>'+
+      '<div class="collection-pagination">'+
+        '<button id="collectionPrev" '+(ui.collectionPage<=0?"disabled":"")+'>← Previous</button>'+
+        '<span>Page '+(ui.collectionPage+1)+' / '+pageCount+'</span>'+
+        '<button id="collectionNext" '+(!(data?.hasMore)?"disabled":"")+'>Next →</button>'+
       '</div>'+
     '</section>';
 
   const search=document.getElementById("collectionSearch");
   search?.addEventListener("input",event=>{
     ui.query=event.target.value;
-    renderCollection();
-    wireCommon();
-    document.getElementById("collectionSearch")?.focus();
+    clearTimeout(collectionSearchTimer);
+    collectionSearchTimer=setTimeout(()=>loadCollectionData({resetPage:true}),220);
   });
 
   document.querySelectorAll("[data-filter]").forEach(button=>button.onclick=()=>{
     ui.collectionFilter=button.dataset.filter;
-    renderCollection();
-    wireCommon();
+    loadCollectionData({resetPage:true});
   });
 
   document.querySelectorAll("[data-collection-mode]").forEach(button=>button.onclick=()=>{
     ui.collectionMode=button.dataset.collectionMode;
-    renderCollection();
-    wireCommon();
+    loadCollectionData({resetPage:true});
   });
 
   document.querySelectorAll("[data-sort]").forEach(button=>button.onclick=()=>{
     ui.collectionSort=button.dataset.sort;
-    renderCollection();
-    wireCommon();
+    loadCollectionData({resetPage:true});
   });
 
   document.querySelectorAll("[data-stack]").forEach(stack=>stack.onclick=()=>{
-    const group=groups.find(item=>item.definitionId===stack.dataset.stack);
+    const group=items.find(item=>String(item.definitionId)===String(stack.dataset.stack));
     if(group)openCollectionStack(group);
   });
 
@@ -552,38 +594,84 @@ function renderCollection(){
     listCard(button.dataset.sell);
   });
 
+  document.getElementById("collectionPrev")?.addEventListener("click",()=>{
+    if(ui.collectionPage<=0)return;
+    ui.collectionPage-=1;
+    loadCollectionData();
+    window.scrollTo({top:0,behavior:"smooth"});
+  });
+
+  document.getElementById("collectionNext")?.addEventListener("click",()=>{
+    if(!data?.hasMore)return;
+    ui.collectionPage+=1;
+    loadCollectionData();
+    window.scrollTo({top:0,behavior:"smooth"});
+  });
+
+  wireMediaObservers();
+
+  if(!data&&!ui.collectionLoading){
+    queueMicrotask(()=>loadCollectionData({resetPage:true}));
+  }
 }
 
-function openCollectionStack(group){
+async function openCollectionStack(group){
   const d=group.card.definition;
+  cardModalContent.innerHTML=
+    '<div class="stack-detail loading-copies">'+
+      '<div class="stack-detail-card">'+cardHtml(group.card,{interactive:false})+'</div>'+
+      '<div class="stack-detail-copy"><span class="eyebrow">OWNED DISCOVERY</span><h2>'+esc(d.commonName)+'</h2><em>'+esc(d.scientificName)+'</em>'+
+      '<div class="stack-copies-loading"><span></span><b>Loading your copies…</b></div></div>'+
+    '</div>';
+  cardModal.showModal();
+  wireMediaObservers();
+
+  try{
+    const result=await api("/api/collection/copies?definitionId="+encodeURIComponent(group.definitionId)+"&limit=250");
+    const copies=result.items||[];
+    renderCollectionStackDetail(group,copies);
+  }catch(error){
+    flash(error.message);
+  }
+}
+
+function renderCollectionStackDetail(group,copies){
+  const d=group.card.definition;
+  const copyCount=copies.length||Number(group.copies||0);
+  const holoCount=copies.filter(card=>card.finish==="HOLO").length||group.holoCount||0;
+  const wildCount=copies.filter(card=>card.edition==="WILD CENSUS I").length||group.wildCount||0;
+  const lowestSerial=copies.length?Math.min(...copies.map(card=>Number(card.serial||Infinity))):group.lowestSerial;
+
   cardModalContent.innerHTML=
     '<div class="stack-detail">'+
       '<div class="stack-detail-card">'+cardHtml(group.card,{interactive:false})+'</div>'+
       '<div class="stack-detail-copy">'+
         '<span class="eyebrow">OWNED DISCOVERY</span><h2>'+esc(d.commonName)+'</h2><em>'+esc(d.scientificName)+'</em>'+
         '<div class="stack-summary">'+
-          '<div><b>'+group.copies.length+'</b><small>copies</small></div>'+
-          '<div><b>'+group.holoCount+'</b><small>holo</small></div>'+
-          '<div><b>'+group.wildCount+'</b><small>wild</small></div>'+
-          '<div><b>#'+(Number.isFinite(group.lowestSerial)?String(group.lowestSerial).padStart(6,"0"):"—")+'</b><small>best serial</small></div>'+
+          '<div><b>'+copyCount+'</b><small>copies</small></div>'+
+          '<div><b>'+holoCount+'</b><small>holo</small></div>'+
+          '<div><b>'+wildCount+'</b><small>wild</small></div>'+
+          '<div><b>#'+(Number.isFinite(lowestSerial)?String(lowestSerial).padStart(6,"0"):"—")+'</b><small>best serial</small></div>'+
         '</div>'+
         '<h3>Your copies</h3>'+
-        '<div class="stack-copy-list">'+group.copies.map(card=>
+        '<div class="stack-copy-list">'+copies.map(card=>
           '<div class="stack-copy-row" data-stack-card="'+esc(card.id)+'"><span class="finish-dot '+(card.finish==="HOLO"?"holo":"")+'"></span><div><b>'+esc(card.edition)+'</b><small>'+esc(serial(card))+'</small></div><span>'+esc(card.finish)+'</span><button data-sell="'+esc(card.id)+'">List</button></div>'
         ).join("")+'</div>'+
       '</div>'+
     '</div>';
-  cardModal.showModal();
+
+  copies.forEach(card=>ui.cardIndex.set(String(card.id),card));
   cardModalContent.querySelectorAll("[data-stack-card]").forEach(row=>row.onclick=event=>{
     if(event.target.closest("[data-sell]"))return;
-    const card=group.copies.find(item=>item.id===row.dataset.stackCard);
+    const card=ui.cardIndex.get(String(row.dataset.stackCard));
     if(card)openCardModal(card.definition,card);
   });
   cardModalContent.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{
     event.stopPropagation();
     listCard(button.dataset.sell);
   });
-  loadKnowledge(d).then(()=>{}).catch(()=>{});
+  wireMediaObservers();
+  loadKnowledge(d).catch(()=>{});
 }
 
 function renderMarket(){
@@ -889,7 +977,7 @@ function finishReveal(){
 }
 
 function openOwnedCard(id){
-  const card=ui.state.inventory.find(c=>c.id===id)||ui.state.market.map(x=>x.card).find(c=>c.id===id);
+  const card=ui.cardIndex.get(String(id))||ui.state.inventory.find(c=>c.id===id)||ui.state.market.map(x=>x.card).find(c=>c.id===id);
   if(!card)return;
   openCardModal(card.definition,card);
 }
@@ -987,6 +1075,9 @@ async function buy(listingId){
 
 async function refresh(shouldRender=true){
   ui.state=await api("/api/state");
+  if(ui.view==="collection"&&!ui.collectionData&&!ui.collectionLoading){
+    queueMicrotask(()=>loadCollectionData({resetPage:true}));
+  }
   ui.stateFetchedAt=Date.now();
   if(!ui.taxonomyStatus){
     api("/api/taxonomy/status").then(result=>{
