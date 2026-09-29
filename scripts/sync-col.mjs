@@ -18,24 +18,31 @@ for (let i = 2; i < process.argv.length; i += 1) {
   }
 }
 
-const datasetKey = String(args.get("dataset") || process.env.COL_DATASET_KEY || "316165");
+const datasetKey = String(args.get("dataset") || process.env.COL_DATASET_KEY || "latest-base");
 const scope = String(args.get("scope") || process.env.COL_SCOPE || "Animalia");
 const outputPath = resolve(args.get("output") || process.env.LIFECARDS_TAXONOMY_DB || "./data/animalia.sqlite");
 const archivePath = resolve(args.get("archive") || `./data/col-${datasetKey}-dwca.zip`);
-const keepArchive = args.get("keep-archive") === "true" || process.env.COL_KEEP_ARCHIVE === "1";
-const sourceUrl = `https://api.checklistbank.org/dataset/${encodeURIComponent(datasetKey)}/export.zip?extended=true&format=DwCA`;
+const keepArchive = args.get("keep-archive") !== "false" && process.env.COL_KEEP_ARCHIVE !== "0";
+const refreshArchive = args.get("refresh") === "true" || process.env.COL_REFRESH === "1";
+const customUrl = args.get("url") || process.env.COL_DWCA_URL;
+const sourceUrl = customUrl || (
+  datasetKey === "latest-base"
+    ? "https://download.checklistbank.org/col/latest_dwca.zip"
+    : `https://api.checklistbank.org/dataset/${encodeURIComponent(datasetKey)}/archive`
+);
 
 await mkdir(dirname(outputPath), { recursive: true });
 
 async function downloadArchive() {
-  if (existsSync(archivePath)) {
+  if (!refreshArchive && existsSync(archivePath)) {
     const info = await stat(archivePath);
     if (info.size > 1024 * 1024) {
-      console.log(`Using existing archive ${archivePath} (${(info.size / 1024 / 1024).toFixed(1)} MB)`);
+      console.log(`Using cached archive ${archivePath} (${(info.size / 1024 / 1024).toFixed(1)} MB)`);
+      console.log("Use --refresh to download a newer Catalogue of Life snapshot.");
       return;
     }
   }
-  console.log(`Downloading Catalogue of Life dataset ${datasetKey}…`);
+  console.log(`Downloading Catalogue of Life source ${datasetKey}…`);
   console.log(sourceUrl);
   const response = await fetch(sourceUrl, {
     redirect: "follow",
