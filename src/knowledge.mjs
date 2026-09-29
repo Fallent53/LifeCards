@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v12";
+const CACHE_SCHEMA_VERSION = "v13";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -721,6 +721,176 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
 
   // Supplemental sources were already evaluated for every entry above.
   for(const entry of fallback){
+    if(!(entry.id in output))output[entry.id]=null;
+  }
+
+  return output;
+}
+
+
+async function wikimediaArticleMediaForLanguage(entries,{lang="en"}={}){
+  const pageBatch=await wikipediaPagesBatch(entries,{lang});
+  const pages=pageBatch.pages;
+  const transientFailures=pageBatch.transientFailures;
+
+  const qids=[...new Set(
+    [...pages.values()].map((page)=>page?.pageprops?.wikibase_item).filter(Boolean)
+  )];
+  const entities=await wikidataEntitiesBatch(qids,{lang});
+
+  const pageImages=[...new Set(
+    [...pages.values()].map((page)=>page?.pageimage).filter(Boolean)
+  )];
+  const wikipediaMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
+
+  const needsCommons=pageImages.filter((name)=>{
+    const media=wikipediaMetadata[normalizeMediaFileKey(name)]||null;
+    return !hasCompleteAttribution(media);
+  });
+  const commonsMetadata=needsCommons.length
+    ?await getCommonsFilesMetadataBatch(needsCommons)
+    :{};
+
+  const output={};
+
+  for(const entry of entries){
+    if(transientFailures.has(lowerKey(entry.query))){
+      output[entry.id]={
+        transient:true,
+        value:null,
+      };
+      continue;
+    }
+
+    const page=pages.get(lowerKey(entry.query))||null;
+    if(!page?.pageimage)continue;
+
+    const qid=page?.pageprops?.wikibase_item||null;
+    const entity=qid?entities[qid]||null:null;
+    const wikidataTaxonName=claimValue(entity,"P225");
+    const exactTaxonIdentity=Boolean(
+      wikidataTaxonName &&
+      lowerKey(wikidataTaxonName)===lowerKey(entry.query)
+    );
+    const exactTitle=page?._lifecardsMatch==="exact-title";
+    const redirectMatch=page?._lifecardsMatch==="redirect";
+
+    // Scientific-title pages are useful even where P225 is missing. Redirects
+    // to common names are trusted when Wikidata confirms the scientific taxon.
+    if(!exactTaxonIdentity&&!exactTitle)continue;
+    if(redirectMatch&&!exactTaxonIdentity)continue;
+
+    const fileKey=normalizeMediaFileKey(page.pageimage);
+    const local=wikipediaMetadata[fileKey]||null;
+    const commons=commonsMetadata[fileKey]||null;
+    const media=
+      (hasCompleteAttribution(commons)?commons:null) ||
+      (hasCompleteAttribution(local)?local:null) ||
+      commons ||
+      local ||
+      wikipediaThumbnailFallback(page,lang);
+
+    if(!media?.imageUrl)continue;
+
+    const confidence=exactTaxonIdentity?"HIGH":"MEDIUM";
+    const value={
+      query:entry.query,
+      wikipedia:{
+        title:page.title,
+        extract:"",
+        description:entity?.descriptions?.[lang]?.value||entity?.descriptions?.en?.value||null,
+        pageUrl:page.fullurl||
+          `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title.replaceAll(" ","_"))}`,
+        thumbnailUrl:page.thumbnail?.source||null,
+        pageImage:page.pageimage||null,
+        language:lang,
+      },
+      wikidata:qid?{
+        id:qid,
+        pageUrl:`https://www.wikidata.org/wiki/${qid}`,
+        taxonName:wikidataTaxonName||entry.query,
+        ncbiTaxId:claimValue(entity,"P685"),
+        imageFile:claimValue(entity,"P18"),
+      }:null,
+      taxonomy:{
+        ncbiTaxId:claimValue(entity,"P685"),
+        ncbiUrl:ncbiUrlForTaxId(claimValue(entity,"P685")),
+        lifemapUrl:lifemapUrlForTaxId(claimValue(entity,"P685")),
+      },
+      media:{
+        ...media,
+        resolver:"wikipedia-pageimage-free",
+        confidence,
+        exactTaxonIdentity,
+        exactWikipediaTitle:exactTitle,
+        wikipediaMatch:page?._lifecardsMatch||null,
+        wikipediaLanguage:lang,
+        commercialReady:true,
+      },
+      sources:["Wikipedia","Wikimedia Commons",entity?"Wikidata":null].filter(Boolean),
+      sourceStatus:{
+        wikipedia:"ok",
+        wikidata:entity?"ok":"unavailable",
+        media:"ok",
+        lifemap:claimValue(entity,"P685")?"linked":"unresolved",
+      },
+      resolvedAt:new Date().toISOString(),
+    };
+
+    output[entry.id]={transient:false,value};
+  }
+
+  return output;
+}
+
+export async function getWikimediaArticleMediaBatch(entries,{
+  languages=["en","fr","de","es","it","pt"],
+}={}){
+  const normalized=[];
+  const seen=new Set();
+
+  for(const entry of Array.isArray(entries)?entries:[]){
+    const id=String(entry?.id??"").trim();
+    const query=String(entry?.query??"").trim();
+    if(!id||!query||seen.has(id))continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      query,
+      rank:String(entry?.rank||""),
+      extinct:Boolean(entry?.extinct),
+    });
+  }
+
+  const output={};
+  let unresolved=normalized;
+
+  for(const lang of languages){
+    if(!unresolved.length)break;
+
+    const batch=await wikimediaArticleMediaForLanguage(unresolved,{lang});
+    const next=[];
+
+    for(const entry of unresolved){
+      const result=batch[entry.id];
+      if(result?.value){
+        output[entry.id]=result.value;
+      }else if(result?.transient){
+        output[entry.id]={
+          query:entry.query,
+          media:null,
+          auditTransientError:`Wikipedia (${lang}) temporarily unavailable`,
+          sourceStatus:{wikipedia:"transient-error",media:"unavailable"},
+        };
+      }else{
+        next.push(entry);
+      }
+    }
+
+    unresolved=next;
+  }
+
+  for(const entry of unresolved){
     if(!(entry.id in output))output[entry.id]=null;
   }
 
