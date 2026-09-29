@@ -47,6 +47,8 @@ let radialMap=null;
 let treeSearchTimer=null;
 let codexSearchTimer=null;
 let collectionSearchTimer=null;
+let mediaBatchTimer=null;
+const mediaBatchQueue=new Set();
 
 const RARITY={
   COMMON:{label:"Common",short:"C"},
@@ -164,6 +166,58 @@ function updateMediaNodes(definitionId){
   });
 }
 
+async function flushMediaBatch(){
+  clearTimeout(mediaBatchTimer);
+  mediaBatchTimer=null;
+
+  const ids=[...mediaBatchQueue].slice(0,12);
+  if(!ids.length)return;
+  ids.forEach(id=>mediaBatchQueue.delete(id));
+
+  const entries=ids.map(id=>{
+    const definition=ui.definitionIndex.get(String(id));
+    return definition?{id:String(id),query:knowledgeQuery(definition)}:null;
+  }).filter(Boolean);
+
+  if(!entries.length)return;
+
+  entries.forEach(entry=>ui.mediaLoading.add(entry.id));
+
+  try{
+    const result=await api("/api/knowledge/batch",{
+      method:"POST",
+      body:JSON.stringify({lang:"en",entries})
+    });
+    const values=result.knowledge||{};
+
+    for(const entry of entries){
+      const knowledge=values[entry.id]||null;
+      if(knowledge)ui.knowledge.set(entry.id,knowledge);
+      ui.media.set(entry.id,knowledge?.media||false);
+      updateMediaNodes(entry.id);
+    }
+  }catch{
+    for(const entry of entries){
+      ui.media.set(entry.id,false);
+      updateMediaNodes(entry.id);
+    }
+  }finally{
+    entries.forEach(entry=>ui.mediaLoading.delete(entry.id));
+    if(mediaBatchQueue.size){
+      mediaBatchTimer=setTimeout(flushMediaBatch,45);
+    }
+  }
+}
+
+function queueMediaLoad(definition){
+  if(!definition)return;
+  const id=String(definition.id);
+  ui.definitionIndex.set(id,definition);
+  if(ui.media.has(id)||ui.mediaLoading.has(id))return;
+  mediaBatchQueue.add(id);
+  if(!mediaBatchTimer)mediaBatchTimer=setTimeout(flushMediaBatch,35);
+}
+
 let mediaObserver=null;
 function wireMediaObservers(){
   mediaObserver?.disconnect();
@@ -175,8 +229,7 @@ function wireMediaObservers(){
       const id=node.dataset.mediaId;
       const definition=ui.definitionIndex.get(String(id));
       if(!definition)return;
-      await loadMedia(definition);
-      updateMediaNodes(id);
+      queueMediaLoad(definition);
     });
     return;
   }
@@ -189,7 +242,7 @@ function wireMediaObservers(){
       const id=node.dataset.mediaId;
       const definition=ui.definitionIndex.get(String(id));
       if(!definition)continue;
-      loadMedia(definition).then(()=>updateMediaNodes(id)).catch(()=>updateMediaNodes(id));
+      queueMediaLoad(definition);
     }
   },{rootMargin:"320px 0px",threshold:0.01});
 
