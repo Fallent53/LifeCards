@@ -4,6 +4,8 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, buyListing, getState } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
+import { getScientificEnrichment } from "./src/science.mjs";
+import { byId } from "./src/catalog.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
@@ -62,9 +64,18 @@ async function api(request, response, url) {
       return json(response, 200, result);
     }
     if (request.method === "GET" && url.pathname === "/api/media") {
-      const query = url.searchParams.get("q") || "";
+      const definitionId = url.searchParams.get("definitionId");
+      const definition = definitionId ? byId.get(definitionId) : null;
+      const query = definition?.mediaQuery || definition?.scientificName || definition?.commonName || url.searchParams.get("q") || "";
       const media = await searchCommonsImage(query);
       return json(response, 200, { media });
+    }
+    if (request.method === "GET" && url.pathname === "/api/science") {
+      const definitionId = String(url.searchParams.get("definitionId") || "");
+      const lang = String(url.searchParams.get("lang") || "en");
+      if (!definitionId) return json(response, 400, { error: "definitionId is required" });
+      const science = await getScientificEnrichment(definitionId, { lang });
+      return json(response, 200, { science });
     }
     return json(response, 404, { error: "Not found" });
   } catch (error) {
