@@ -66,11 +66,21 @@ quality.exec(`
     checked_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS card_quality_status_idx ON card_quality(status);
+  CREATE INDEX IF NOT EXISTS card_quality_rarity_status_idx ON card_quality(rarity,status);
   CREATE TABLE IF NOT EXISTS meta(
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
 `);
+
+try{
+  taxonomy.prepare("ATTACH DATABASE ? AS qualitydb").run(qualityPath);
+}catch(error){
+  console.error("Unable to attach quality DB:",error.message);
+  taxonomy.close();
+  quality.close();
+  process.exit(1);
+}
 
 function scalar(db,sql,...params){
   return Number(db.prepare(sql).get(...params)?.value||0);
@@ -142,8 +152,7 @@ const rows=taxonomy.prepare(`
     t.status AS taxonomic_status
   FROM drop_pool p
   JOIN taxa t ON t.id=p.taxon_id
-  LEFT JOIN card_quality q ON 1=0
-  WHERE p.taxon_id NOT IN (SELECT taxon_id FROM card_quality)
+  WHERE p.taxon_id NOT IN (SELECT taxon_id FROM qualitydb.card_quality)
   ORDER BY
     CASE p.rarity
       WHEN 'MYTHIC' THEN 1
@@ -270,6 +279,37 @@ await Promise.all(
 );
 
 const finalStats=stats();
+
+if(finalStats.complete){
+  quality.exec(`
+    DROP TABLE IF EXISTS ready_drop_pool;
+    DROP TABLE IF EXISTS ready_drop_pool_stats;
+    CREATE TABLE ready_drop_pool(
+      rarity TEXT NOT NULL,
+      slot INTEGER NOT NULL,
+      taxon_id TEXT NOT NULL,
+      PRIMARY KEY(rarity,slot),
+      UNIQUE(taxon_id)
+    );
+    INSERT INTO ready_drop_pool(rarity,slot,taxon_id)
+    SELECT
+      rarity,
+      ROW_NUMBER() OVER (PARTITION BY rarity ORDER BY taxon_id),
+      taxon_id
+    FROM card_quality
+    WHERE status='READY';
+
+    CREATE TABLE ready_drop_pool_stats(
+      rarity TEXT PRIMARY KEY,
+      card_count INTEGER NOT NULL
+    );
+    INSERT INTO ready_drop_pool_stats(rarity,card_count)
+    SELECT rarity,COUNT(*)
+    FROM ready_drop_pool
+    GROUP BY rarity;
+  `);
+}
+
 quality.prepare(
   "INSERT OR REPLACE INTO meta(key,value) VALUES ('last_run_at',?)"
 ).run(new Date().toISOString());
