@@ -46,7 +46,7 @@ CREATE TABLE cards (
 CREATE UNIQUE INDEX unique_luca ON cards(definition_id) WHERE definition_id='luca';
 CREATE TABLE listings (
   id uuid PRIMARY KEY,
-  card_id uuid NOT NULL UNIQUE REFERENCES cards(id),
+  card_id uuid NOT NULL REFERENCES cards(id),
   seller_id uuid NOT NULL REFERENCES users(id),
   buyer_id uuid REFERENCES users(id),
   price bigint NOT NULL CHECK(price > 0),
@@ -64,3 +64,60 @@ CREATE TABLE external_cache (
   PRIMARY KEY(provider, cache_key)
 );
 CREATE INDEX external_cache_expiry_idx ON external_cache(expires_at);
+
+CREATE UNIQUE INDEX listings_one_active_per_card
+  ON listings(card_id) WHERE status = 'ACTIVE';
+
+CREATE TABLE auctions (
+  id uuid PRIMARY KEY,
+  card_id uuid NOT NULL REFERENCES cards(id),
+  seller_id uuid NOT NULL REFERENCES users(id),
+  starting_price bigint NOT NULL CHECK(starting_price > 0),
+  highest_bid bigint,
+  highest_bidder_id uuid REFERENCES users(id),
+  ends_at timestamptz NOT NULL,
+  status text NOT NULL DEFAULT 'ACTIVE',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  settled_at timestamptz
+);
+CREATE UNIQUE INDEX auctions_one_active_per_card
+  ON auctions(card_id) WHERE status = 'ACTIVE';
+CREATE INDEX auctions_status_end_idx ON auctions(status, ends_at);
+
+CREATE TABLE auction_bids (
+  id uuid PRIMARY KEY,
+  auction_id uuid NOT NULL REFERENCES auctions(id),
+  bidder_id uuid NOT NULL REFERENCES users(id),
+  amount bigint NOT NULL CHECK(amount > 0),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE knowledge_stats (
+  user_id uuid PRIMARY KEY REFERENCES users(id),
+  points bigint NOT NULL DEFAULT 0,
+  correct_answers bigint NOT NULL DEFAULT 0,
+  total_answers bigint NOT NULL DEFAULT 0,
+  streak integer NOT NULL DEFAULT 0,
+  best_streak integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE quiz_questions (
+  id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id),
+  prompt text NOT NULL,
+  options jsonb NOT NULL,
+  correct_option text NOT NULL,
+  explanation text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  answered_at timestamptz
+);
+
+CREATE TABLE pack_audit (
+  id uuid PRIMARY KEY,
+  user_id uuid NOT NULL REFERENCES users(id),
+  opened_at timestamptz NOT NULL DEFAULT now(),
+  payload jsonb NOT NULL,
+  prev_hash text,
+  audit_hash text NOT NULL UNIQUE
+);
+CREATE INDEX pack_audit_opened_idx ON pack_audit(opened_at DESC);
