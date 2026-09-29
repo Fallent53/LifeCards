@@ -240,3 +240,39 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   writePersistentCache(persistedQuery, lang, value);
   return value;
 }
+
+
+export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 } = {}) {
+  const normalized = [];
+  const seen = new Set();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const id = String(entry?.id ?? "").trim();
+    const query = String(entry?.query ?? "").trim();
+    if (!id || !query || seen.has(id)) continue;
+    seen.add(id);
+    normalized.push({ id, query });
+    if (normalized.length >= 24) break;
+  }
+
+  const output = {};
+  let cursor = 0;
+  const workerCount = Math.max(1, Math.min(6, Number(concurrency) || 4));
+
+  async function worker() {
+    while (cursor < normalized.length) {
+      const item = normalized[cursor++];
+      try {
+        output[item.id] = await getKnowledge(item.query, { lang });
+      } catch {
+        output[item.id] = null;
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(workerCount, normalized.length || 1) }, () => worker())
+  );
+
+  return output;
+}
