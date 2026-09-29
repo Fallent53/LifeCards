@@ -215,3 +215,6 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .radial-map-svg[data-zoom="near"] .radial-node .radial-node-label{opacity:1}
 .radial-map-svg[data-zoom="near"] .radial-node .radial-node-rank{opacity:.82}
 .radial-node-label,.radial-node-rank{transition:opacity .16s}
+
+.pack-rules .data-live{border-color:#3d7b57;background:#10271a;color:#8ce0aa}
+.pack-rules .data-seed{border-color:#685b35;background:#1c180d;color:#cdbd7a}
