@@ -94,10 +94,18 @@ async function loadMedia(definition){
   }
 }
 
-async function warmMedia(definitions){
+async function warmMedia(definitions,{rerender=true}={}){
   const unique=[...new Map(definitions.filter(Boolean).map(d=>[d.id,d])).values()];
-  await Promise.allSettled(unique.slice(0,18).map(loadMedia));
-  render();
+  const pending=unique.filter(d=>!ui.media.has(d.id)&&!ui.mediaLoading.has(d.id)).slice(0,18);
+  if(!pending.length)return false;
+
+  await Promise.allSettled(pending.map(loadMedia));
+
+  if(rerender){
+    if(revealDialog.open&&ui.reveal)renderReveal();
+    else render();
+  }
+  return true;
 }
 
 function imageMarkup(definition){
@@ -325,8 +333,10 @@ async function openPack(){
     const result=await api("/api/packs/open",{method:"POST",body:"{}"});
     ui.reveal={cards:result.cards,originCard:result.originCard};
     ui.revealIndex=0;
-    await warmMedia(result.cards.map(c=>c.definition));
-    setTimeout(()=>renderReveal(),650);
+    setTimeout(()=>renderReveal(),420);
+    warmMedia(result.cards.map(c=>c.definition),{rerender:false}).then(()=>{
+      if(revealDialog.open&&ui.reveal)renderReveal();
+    }).catch(()=>{});
     await refresh(false);
   }catch(error){
     revealDialog.close();
