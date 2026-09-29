@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { catalog, byId } from "./catalog.mjs";
 
 const gameplayTaxonomyPath = resolve(
-  process.env.LIFECARDS_TAXONOMY_DB ?? "./data/animalia.sqlite"
+  process.env.LIFECARDS_TAXONOMY_DB ?? "./data/eukaryota.sqlite"
 );
 const mapTaxonomyPath = resolve(
   process.env.LIFECARDS_MAP_TAXONOMY_DB ?? "./data/life.sqlite"
@@ -309,7 +309,7 @@ export function taxonomyStatus() {
       dropPool: {},
       cardQuality: cardQualityStatus(),
       hint:
-        "Run npm install && npm run sync:col to build the Animalia gameplay taxonomy. " +
+        "Run npm install && npm run sync:col to build the Eukaryota gameplay taxonomy. " +
         "Run npm run sync:map for the optional full-life map.",
     };
   }
