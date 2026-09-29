@@ -295,9 +295,10 @@ function taxonomySummary(status){
   if(status.ready){
     const taxa=status.taxonCount!=null?formatNumber(status.taxonCount)+" taxa":"local taxonomy";
     const species=status.speciesCount!=null?" · "+formatNumber(status.speciesCount)+" species":"";
-    return "Catalogue of Life · "+taxa+species;
+    const scope=status.fullLifeMap?"Full Life Map":(status.mapScope||status.scope||"Animalia");
+    return scope+" · "+taxa+species;
   }
-  return "Seed tree · import full Animalia with npm run sync:col";
+  return "Seed tree · run npm run sync:col";
 }
 
 function cardHtml(card,{compact=false,interactive=true,showSell=false}={}){
@@ -917,7 +918,7 @@ function renderTree(){
         '<div id="treeBreadcrumb" class="tree-breadcrumb"></div>'+
       '</div>'+
       '<div id="radialTreeMap" class="radial-tree-map loading"><div class="radial-loading"><span></span><b>Building phylogenetic map…</b></div></div>'+
-      '<div class="tree-map-foot"><span>Data backbone: '+esc(status?.ready?"Catalogue of Life":"LifeCards seed taxonomy")+'</span><span>External scientific links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
+      '<div class="tree-map-foot"><span>Map: '+esc(status?.fullLifeMap?"Catalogue of Life · full life":status?.ready?"Catalogue of Life · "+(status.mapScope||status.scope||"Animalia"):"LifeCards seed taxonomy")+'</span><span>Drops: '+esc(status?.dropPoolReady?(status.dropScope||"Animalia")+" indexed pool":"seed pool")+' · External links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
     '</section>';
 
   document.getElementById("originBeacon")?.addEventListener("click",()=>openDefinition("luca"));
