@@ -4,6 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, buyListing, getState } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
+import { getKnowledge } from "./src/knowledge.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
@@ -65,6 +66,15 @@ async function api(request, response, url) {
       const query = url.searchParams.get("q") || "";
       const media = await searchCommonsImage(query);
       return json(response, 200, { media });
+    }
+    if (request.method === "GET" && url.pathname === "/api/knowledge") {
+      const query = url.searchParams.get("q") || "";
+      const lang = (url.searchParams.get("lang") || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
+      const knowledge = await getKnowledge(query, { lang });
+      return json(response, 200, { knowledge });
+    }
+    if (request.method === "GET" && url.pathname === "/api/health") {
+      return json(response, 200, { ok: true, service: "LifeCards", time: new Date().toISOString() });
     }
     return json(response, 404, { error: "Not found" });
   } catch (error) {
