@@ -531,7 +531,7 @@ function renderTree(){
     '<section class="tree-map-page">'+
       '<div class="tree-map-head">'+
         '<div><span class="eyebrow">PHYLOGENETIC CARTOGRAPHY</span><h1>Tree of Life</h1><p>Navigate the classification as a living radial map. Zoom into a branch until individual species emerge.</p></div>'+
-        '<div class="taxonomy-status '+(status?.ready?"ready":"seed")+'"><i></i><div><b>'+esc(taxonomySummary(status))+'</b><small>'+(status?.ready?esc(status.release||status.datasetKey||"Catalogue of Life"):'The game remains usable while the full database is absent.')+'</small></div></div>'+
+        '<div class="tree-head-actions"><button id="originBeacon" class="origin-beacon"><span>✺</span><div><small>ORIGIN</small><b>LUCA · UNKNOWN #1/1</b></div></button><div class="taxonomy-status '+(status?.ready?"ready":"seed")+'"><i></i><div><b>'+esc(taxonomySummary(status))+'</b><small>'+(status?.ready?esc(status.release||status.datasetKey||"Catalogue of Life"):'The game remains usable while the full database is absent.')+'</small></div></div></div>'+
       '</div>'+
       '<div class="tree-map-controls">'+
         '<div class="tree-search-wrap radial-search"><label class="search-box"><span>⌕</span><input id="treeSearch" autocomplete="off" placeholder="Lion, Felidae, Mollusca, Arthropoda…" value="'+esc(ui.treeQuery)+'"></label><div id="treeSearchResults" class="tree-search-results"></div></div>'+
@@ -541,6 +541,7 @@ function renderTree(){
       '<div class="tree-map-foot"><span>Data backbone: '+esc(status?.ready?"Catalogue of Life":"LifeCards seed taxonomy")+'</span><span>External scientific links: Wikipedia · Wikidata · NCBI · Lifemap</span></div>'+
     '</section>';
 
+  document.getElementById("originBeacon")?.addEventListener("click",()=>openDefinition("luca"));
   const search=document.getElementById("treeSearch");
   search?.addEventListener("input",event=>{
     ui.treeQuery=event.target.value;
