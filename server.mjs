@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, buyListing, cancelListing, getState, createKnowledgeQuestion, answerKnowledgeQuestion, createAuction, placeAuctionBid, cancelAuction } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
-import { getScientificEnrichment } from "./src/science.mjs";
+import { getScientificEnrichment, searchNcbiTaxa } from "./src/science.mjs";
 import { byId } from "./src/catalog.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
@@ -94,6 +94,12 @@ async function api(request, response, url) {
       if (!definitionId) return json(response, 400, { error: "definitionId is required" });
       const science = await getScientificEnrichment(definitionId, { lang });
       return json(response, 200, { science });
+    }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/search") {
+      const query = String(url.searchParams.get("q") || "").trim();
+      if (query.length < 2) return json(response, 200, { results: [] });
+      const results = await searchNcbiTaxa(query, { limit: 12 });
+      return json(response, 200, { results });
     }
     if (request.method === "POST" && url.pathname === "/api/knowledge/question") {
       return json(response, 201, { question: createKnowledgeQuestion(uid) });
