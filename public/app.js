@@ -240,7 +240,12 @@ async function flushMediaBatch(){
 
   const entries=ids.map(id=>{
     const definition=ui.definitionIndex.get(String(id));
-    return definition?{id:String(id),query:knowledgeQuery(definition)}:null;
+    return definition?{
+      id:String(id),
+      query:knowledgeQuery(definition),
+      scientificName:definition.scientificName||definition.canonicalName||knowledgeQuery(definition),
+      rank:definition.rank||definition.kind||"",
+    }:null;
   }).filter(Boolean);
 
   if(!entries.length)return;
