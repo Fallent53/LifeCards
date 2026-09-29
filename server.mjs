@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance, getAuditHead, getPackAuditForUser } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
-import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
+import { getKnowledge, getFastMediaBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree, getRepresentativeMediaQueries } from "./src/taxonomy-store.mjs";
 import { remoteSearchTaxa, remoteGetTaxon, remoteGetChildren, remoteGetPath, remoteGetSubtree, remoteStatusHint } from "./src/checklistbank.mjs";
 
@@ -221,7 +221,7 @@ async function api(request, response, url) {
             4
           ),
         }));
-      const knowledge = await getKnowledgeBatch(entries, { lang, concurrency: 4 });
+      const knowledge = await getFastMediaBatch(entries, { lang });
       return json(response, 200, { knowledge });
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
