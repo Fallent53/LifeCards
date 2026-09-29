@@ -331,7 +331,9 @@ function renderPacks(){
         '<span class="eyebrow">EXPEDITION SUPPLY</span>'+
         '<h1>Open the living world.</h1>'+
         '<p>Six discoveries per pack. Species, extinct life and phylogenetic nodes all share the same Tree of Life.</p>'+
-        '<div class="pack-rules"><span>6 cards</span><span>1 pack / 8 min</span><span>8 stored max</span><span>'+Math.round(config.holoRate*1000)/10+'% Holo</span></div>'+
+        '<div class="pack-rules"><span>6 cards</span><span>1 pack / 8 min</span><span>8 stored max</span><span>'+Math.round(config.holoRate*1000)/10+'% Holo</span>'+
+          (ui.taxonomyStatus?.dropPoolReady?'<span class="data-live">'+formatNumber(Object.values(ui.taxonomyStatus.dropPool||{}).reduce((a,b)=>a+b,0))+' indexed cards</span>':'<span class="data-seed">Seed drop pool</span>')+
+        '</div>'+
       '</div>'+
       '<div class="pack-stage">'+
         '<div class="ambient-ring ring-one"></div><div class="ambient-ring ring-two"></div>'+
@@ -794,7 +796,7 @@ async function refresh(shouldRender=true){
   if(!ui.taxonomyStatus){
     api("/api/taxonomy/status").then(result=>{
       ui.taxonomyStatus=result.taxonomy||null;
-      if(ui.view==="tree"||ui.view==="codex")render();
+      if(["tree","codex","packs"].includes(ui.view))render();
     }).catch(()=>{});
   }
   updateChrome();
