@@ -800,3 +800,20 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   from{transform:scale(.9)}
   to{transform:scale(1.28)}
 }
+
+
+.atlas-actions .atlas-more{
+  width:auto;
+  min-width:38px;
+  padding:0 7px;
+  border-color:#446c52;
+  background:#11271a;
+  color:#91d6a8;
+  font-size:7px;
+  font-weight:700;
+}
+.atlas-actions .atlas-more:hover{
+  border-color:#6fb78a;
+  background:#173622;
+  color:#e5ffed;
+}
