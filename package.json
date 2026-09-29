@@ -8,7 +8,7 @@
     "dev": "node --watch server.mjs",
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check src/game-engine.mjs && node --check src/database.mjs && node --check src/definitions.mjs && node --check src/taxonomy-store.mjs && node --check src/knowledge.mjs && node --check public/app.js && node --check public/radial-tree.js && node --check scripts/sync-col.mjs && node --check scripts/audit-cards.mjs",
+    "check": "node --check server.mjs && node --check src/game-engine.mjs && node --check src/database.mjs && node --check src/definitions.mjs && node --check src/taxonomy-store.mjs && node --check src/knowledge.mjs && node --check public/app.js && node --check public/radial-tree.js && node --check scripts/sync-col.mjs && node --check scripts/audit-cards.mjs && node --check scripts/repair-eukaryota.mjs",
     "sync:knowledge": "node scripts/sync-knowledge.mjs",
     "sync:col": "npm run sync:eukaryota",
     "sync:col:all": "npm run sync:map",
@@ -19,7 +19,8 @@
     "audit:cards:status": "node scripts/audit-cards.mjs --status",
     "audit:cards:full": "node scripts/audit-cards.mjs --all",
     "sync:eukaryota": "node scripts/sync-col.mjs --scope Eukaryota --output ./data/eukaryota.sqlite",
-    "sync:animalia": "node scripts/sync-col.mjs --scope Animalia --output ./data/animalia.sqlite"
+    "sync:animalia": "node scripts/sync-col.mjs --scope Animalia --output ./data/animalia.sqlite",
+    "repair:eukaryota": "node scripts/repair-eukaryota.mjs"
   },
   "engines": {
     "node": ">=22.5.0"
