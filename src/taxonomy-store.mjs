@@ -529,79 +529,49 @@ export function getGameplayTaxon(id) {
 
 export function pickDropTaxon(rarity, rng) {
   const db = openGameplayDb();
-  if (!db) return null;
+  if (!db || !tableExists(db, "drop_pool")) return null;
 
   try {
-    const quality = cardQualityStatus();
-    if (quality.readyPoolActive) {
-      const qdb = openQualityDb();
-      const stat = qdb
-        .prepare("SELECT card_count FROM ready_drop_pool_stats WHERE rarity = ?")
-        .get(String(rarity));
-      let ready = null;
-      let selectedRarity = String(rarity);
-      const count = Number(stat?.card_count || 0);
+    const requestedRarity = String(rarity);
+    const stat = tableExists(db, "drop_pool_stats")
+      ? db.prepare("SELECT card_count FROM drop_pool_stats WHERE rarity = ?").get(requestedRarity)
+      : null;
+    const count = Number(stat?.card_count || 0);
 
-      if (count > 0) {
-        const slot =
-          (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
-        ready = qdb
-          .prepare("SELECT taxon_id FROM ready_drop_pool WHERE rarity = ? AND slot = ? LIMIT 1")
-          .get(selectedRarity, slot);
-      }
-
-      // During progressive auditing some rarity buckets may still be empty.
-      // Stay inside the verified real-media pool rather than falling back to
-      // an unaudited/no-image taxon.
-      if (!ready?.taxon_id) {
-        const total = Number(
-          qdb.prepare("SELECT COUNT(*) AS count FROM ready_drop_pool").get()?.count || 0
-        );
-        if (!total) return null;
-        const offset = rng?.int ? rng.int(total) : Math.floor(Math.random() * total);
-        const fallback = qdb
-          .prepare("SELECT taxon_id,rarity FROM ready_drop_pool ORDER BY rarity,slot LIMIT 1 OFFSET ?")
-          .get(offset);
-        if (!fallback?.taxon_id) return null;
-        ready = fallback;
-        selectedRarity = String(fallback.rarity || rarity);
-      }
-
+    if (count > 0) {
+      const slot =
+        (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
       const row = db
         .prepare(`
-          SELECT t.*, ? AS pool_rarity
-          FROM taxa t
-          WHERE t.id = ?
+          SELECT t.*, p.rarity AS pool_rarity
+          FROM drop_pool p
+          JOIN taxa t ON t.id = p.taxon_id
+          WHERE p.rarity = ? AND p.slot = ?
           LIMIT 1
         `)
-        .get(selectedRarity, String(ready.taxon_id));
-      return mapRow(row);
+        .get(requestedRarity, slot);
+      if (row) return mapRow(row);
     }
 
-    // Option A: once the real gameplay taxonomy is active, packs are
-    // strictly media-gated. Never draw from the raw taxonomy pool.
-    return null;
+    // A missing rarity bucket must never prevent a pack from opening.
+    // Pick any in-scope taxon from the authoritative gameplay drop pool.
+    const total = Number(
+      db.prepare("SELECT COUNT(*) AS count FROM drop_pool").get()?.count || 0
+    );
+    if (!total) return null;
 
-    const stat = db
-      .prepare("SELECT card_count FROM drop_pool_stats WHERE rarity = ?")
-      .get(String(rarity));
-    const count = Number(stat?.card_count || 0);
-    if (!count) return null;
-
-    const slot =
-      (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
-
-    const row = db
+    const offset = rng?.int ? rng.int(total) : Math.floor(Math.random() * total);
+    const fallback = db
       .prepare(`
         SELECT t.*, p.rarity AS pool_rarity
         FROM drop_pool p
         JOIN taxa t ON t.id = p.taxon_id
-        WHERE p.rarity = ? AND p.slot = ?
-        LIMIT 1
+        ORDER BY p.rarity, p.slot
+        LIMIT 1 OFFSET ?
       `)
-      .get(String(rarity), slot);
+      .get(offset);
 
-    return mapRow(row);
+    return mapRow(fallback);
   } catch {
     return null;
   }
