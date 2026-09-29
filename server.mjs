@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies } from "./src/database.mjs";
+import { claimPack, createListing, cancelListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames, listMarketPage, getDefinitionSupplies, getCardProvenance } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -145,12 +145,21 @@ async function api(request, response, url) {
       return json(response, 200, result);
     }
     if (request.method === "GET" && url.pathname === "/api/market") {
+      const scope = url.searchParams.get("scope") || "MARKET";
       const filter = url.searchParams.get("filter") || "ALL";
       const query = url.searchParams.get("q") || "";
       const sort = url.searchParams.get("sort") || "NEWEST";
       const limit = Number(url.searchParams.get("limit") || 24);
       const offset = Number(url.searchParams.get("offset") || 0);
-      return json(response, 200, listMarketPage({ filter, query, sort, limit, offset }));
+      return json(response, 200, listMarketPage({
+        viewerId: uid,
+        scope,
+        filter,
+        query,
+        sort,
+        limit,
+        offset,
+      }));
     }
     if (request.method === "POST" && url.pathname === "/api/market/list") {
       const input = await bodyJson(request);
@@ -173,6 +182,12 @@ async function api(request, response, url) {
         definitionId,
         items: getDefinitionSupplies(definitionId),
       });
+    }
+    if (request.method === "GET" && url.pathname === "/api/cards/provenance") {
+      const cardId = url.searchParams.get("cardId") || "";
+      const provenance = getCardProvenance(cardId);
+      if (!provenance) return json(response, 404, { error: "Card not found" });
+      return json(response, 200, { provenance });
     }
     if (request.method === "GET" && url.pathname === "/api/media") {
       const query = url.searchParams.get("q") || "";
