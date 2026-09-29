@@ -6,6 +6,7 @@ import { claimPack, createListing, buyListing, getState } from "./src/database.m
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
+import { remoteSearchTaxa, remoteGetTaxon, remoteGetChildren, remoteGetPath, remoteGetSubtree, remoteStatusHint } from "./src/checklistbank.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = join(root, "public");
@@ -43,6 +44,66 @@ async function bodyJson(request) {
   return raw ? JSON.parse(raw) : {};
 }
 
+function effectiveTaxonomyStatus() {
+  const local = taxonomyStatus();
+  return local.ready ? local : { ...remoteStatusHint(), localFallback: local };
+}
+
+async function effectiveSearchTaxa(query, limit) {
+  const local = taxonomyStatus();
+  if (local.ready) return { results: searchTaxa(query, limit), taxonomy: local };
+  try {
+    return { results: await remoteSearchTaxa(query, limit), taxonomy: effectiveTaxonomyStatus() };
+  } catch {
+    return { results: searchTaxa(query, limit), taxonomy: local };
+  }
+}
+
+async function effectiveGetTaxon(id) {
+  const local = taxonomyStatus();
+  if (local.ready) return { taxon: getTaxon(id), path: getPath(id), taxonomy: local };
+  try {
+    const [taxon, path] = await Promise.all([remoteGetTaxon(id), remoteGetPath(id)]);
+    return { taxon, path, taxonomy: effectiveTaxonomyStatus() };
+  } catch {
+    return { taxon: getTaxon(id), path: getPath(id), taxonomy: local };
+  }
+}
+
+async function effectiveGetChildren(id, limit) {
+  const local = taxonomyStatus();
+  if (local.ready) return { children: getChildren(id, limit), taxonomy: local };
+  try {
+    return { children: await remoteGetChildren(id, limit), taxonomy: effectiveTaxonomyStatus() };
+  } catch {
+    return { children: getChildren(id, limit), taxonomy: local };
+  }
+}
+
+async function effectiveGetPath(id) {
+  const local = taxonomyStatus();
+  if (local.ready) return { path: getPath(id), taxonomy: local };
+  try {
+    return { path: await remoteGetPath(id), taxonomy: effectiveTaxonomyStatus() };
+  } catch {
+    return { path: getPath(id), taxonomy: local };
+  }
+}
+
+async function effectiveGetSubtree(root, options) {
+  const local = taxonomyStatus();
+  if (local.ready) return getSubtree(root, options);
+  try {
+    return await remoteGetSubtree(root, {
+      depth: Math.min(2, options.depth || 2),
+      childLimit: Math.min(36, options.childLimit || 30),
+      nodeLimit: Math.min(420, options.nodeLimit || 360),
+    });
+  } catch {
+    return getSubtree(root, options);
+  }
+}
+
 async function api(request, response, url) {
   try {
     const uid = userId(request);
@@ -75,38 +136,38 @@ async function api(request, response, url) {
       return json(response, 200, { knowledge });
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
-      return json(response, 200, { taxonomy: taxonomyStatus() });
+      return json(response, 200, { taxonomy: effectiveTaxonomyStatus() });
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/search") {
       const query = url.searchParams.get("q") || "";
       const limit = Number(url.searchParams.get("limit") || 30);
-      return json(response, 200, { results: searchTaxa(query, limit), taxonomy: taxonomyStatus() });
+      return json(response, 200, await effectiveSearchTaxa(query, limit));
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/taxon") {
       const id = url.searchParams.get("id") || "";
-      return json(response, 200, { taxon: getTaxon(id), path: getPath(id), taxonomy: taxonomyStatus() });
+      return json(response, 200, await effectiveGetTaxon(id));
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/children") {
       const id = url.searchParams.get("id") || "";
       const limit = Number(url.searchParams.get("limit") || 120);
-      return json(response, 200, { children: getChildren(id, limit), taxonomy: taxonomyStatus() });
+      return json(response, 200, await effectiveGetChildren(id, limit));
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/path") {
       const id = url.searchParams.get("id") || "";
-      return json(response, 200, { path: getPath(id), taxonomy: taxonomyStatus() });
+      return json(response, 200, await effectiveGetPath(id));
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/subtree") {
       const root = url.searchParams.get("root") || "";
       const depth = Math.max(1, Math.min(5, Number(url.searchParams.get("depth") || 3)));
       const childLimit = Math.max(6, Math.min(100, Number(url.searchParams.get("childLimit") || 42)));
       const nodeLimit = Math.max(50, Math.min(1400, Number(url.searchParams.get("nodeLimit") || 850)));
-      return json(response, 200, getSubtree(root, { depth, childLimit, nodeLimit }));
+      return json(response, 200, await effectiveGetSubtree(root, { depth, childLimit, nodeLimit }));
     }
     if (request.method === "GET" && url.pathname === "/api/health") {
       return json(response, 200, {
         ok: true,
         service: "LifeCards",
-        taxonomy: taxonomyStatus(),
+        taxonomy: effectiveTaxonomyStatus(),
         time: new Date().toISOString(),
       });
     }
