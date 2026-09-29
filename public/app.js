@@ -1476,7 +1476,7 @@ async function openPack(){
       wait(850)
     ]);
 
-    ui.reveal={cards:result.cards,originCard:result.originCard};
+    ui.reveal={cards:result.cards,originCard:result.originCard,audit:result.audit||null};
     ui.revealIndex=0;
 
     const stage=revealScene.querySelector(".opening-stage");
@@ -1509,6 +1509,9 @@ function renderRevealSummary(){
     '<div class="reveal-summary">'+
       '<button class="reveal-close" data-close-reveal>×</button>'+
       '<div class="reveal-summary-head"><span class="eyebrow">ARCHIVE COMPLETE</span><h2>Your discoveries</h2><p>'+ui.reveal.cards.length+' cards catalogued'+(ui.reveal.originCard?' · Origin event detected':'')+'.</p></div>'+
+      (ui.reveal.audit
+        ?'<div class="pack-audit-proof"><div><span>PACK AUDIT #'+formatNumber(ui.reveal.audit.sequence)+'</span><b>'+esc(String(ui.reveal.audit.hash||"").slice(0,18))+'…</b></div><small>SHA-256 chained to the previous issued pack</small></div>'
+        :"")+
       '<div class="reveal-summary-grid">'+cards.map(revealSummaryCard).join("")+'</div>'+
       '<div class="reveal-summary-actions"><button class="reveal-next summary-continue" id="revealFinish">Add to collection</button></div>'+
     '</div>';
@@ -1634,7 +1637,8 @@ function provenanceTimelineHtml(card){
   return '<div class="provenance-timeline">'+events.map((event,index)=>{
     const date=event.at?new Date(event.at).toLocaleString():"Unknown date";
     if(event.type==="ISSUED"){
-      return '<div class="provenance-event issued"><i></i><div><span>ISSUED</span><b>'+esc(event.ownerId||"Unknown discoverer")+'</b><small>'+esc(date)+' · '+esc(event.edition||card.edition)+' · '+esc(serial(card))+'</small></div></div>';
+      const audit=provenance.issueAudit;
+      return '<div class="provenance-event issued"><i></i><div><span>ISSUED</span><b>'+esc(event.ownerId||"Unknown discoverer")+'</b><small>'+esc(date)+' · '+esc(event.edition||card.edition)+' · '+esc(serial(card))+(audit?' · audit #'+formatNumber(audit.sequence):'')+'</small>'+(audit?'<code>'+esc(String(audit.hash||"").slice(0,22))+'…</code>':'')+'</div></div>';
     }
     return '<div class="provenance-event sold"><i></i><div><span>OFFICIAL SALE</span><b>'+esc(event.sellerId||"Unknown")+' → '+esc(event.buyerId||"Unknown")+'</b><small>'+esc(date)+' · ◆ '+formatNumber(event.price||0)+'</small></div></div>';
   }).join("")+'</div>'+
