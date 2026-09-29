@@ -301,7 +301,7 @@ function wireMediaObservers(){
 
 function knowledgeQuery(definition){
   if(definition.kind==="origin")return definition.commonName||"Last universal common ancestor";
-  return definition.scientificName||definition.commonName;
+  return definition.mediaQuery||definition.canonicalName||definition.scientificName||definition.commonName;
 }
 
 async function loadTaxonomyContext(definition){
