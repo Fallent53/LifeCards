@@ -193,6 +193,30 @@ function normalizeScientificName(value = "") {
     .toLowerCase();
 }
 
+function comparableScientificName(value = "") {
+  return normalizeScientificName(value)
+    .replace(/^([a-zà-öø-ÿ.-]+)\s+\([^)]+\)\s+/i, "$1 ")
+    .replace(/\s+(?:subsp\.|ssp\.|var\.|subvar\.|f\.|forma)\s+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function scientificNameVariants(value = "") {
+  const original=String(value||"").replace(/\s+/g," ").trim();
+  if(!original)return [];
+
+  const values=[
+    original,
+    original.replace(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+)\s+\([^)]+\)\s+/u,"$1 "),
+    original.replace(/\s+(?:subsp\.|ssp\.|var\.|subvar\.|f\.|forma)\s+/gi," "),
+    original
+      .replace(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+)\s+\([^)]+\)\s+/u,"$1 ")
+      .replace(/\s+(?:subsp\.|ssp\.|var\.|subvar\.|f\.|forma)\s+/gi," "),
+  ].map((item)=>item.replace(/\s+/g," ").trim()).filter(Boolean);
+
+  return [...new Set(values)];
+}
+
 function acceptedOpenLicense(value = "") {
   const license=String(value||"").trim().toLowerCase();
   if(!license)return false;
@@ -257,20 +281,24 @@ export async function searchGbifImage(scientificName,{fieldOnly=false}={}) {
   }
 
   function choose(json){
-    const canonical=normalizeScientificName(query);
+    const canonical=comparableScientificName(query);
     for(const occurrence of json?.results??[]){
       if(fieldOnly){
         const basis=String(occurrence.basisOfRecord||"").toUpperCase();
         if(!["HUMAN_OBSERVATION","MACHINE_OBSERVATION","OBSERVATION"].includes(basis))continue;
       }
 
-      const occurrenceName=normalizeScientificName(
+      const occurrenceName=comparableScientificName(
         occurrence.acceptedScientificName||
         occurrence.species||
         occurrence.scientificName||
         ""
       );
-      if(!occurrenceName.startsWith(canonical))continue;
+      if(
+        occurrenceName!==canonical &&
+        !occurrenceName.startsWith(canonical+" ") &&
+        !canonical.startsWith(occurrenceName+" ")
+      )continue;
 
       for(const item of occurrence.media??[]){
         const identifier=item.identifier||item.references;
@@ -307,18 +335,21 @@ export async function searchGbifImage(scientificName,{fieldOnly=false}={}) {
     return null;
   }
 
-  try{
-    const direct=choose(await occurrenceSearch({scientificName:query}));
-    if(direct){
-      memoryCache.set(key,direct);
-      return direct;
-    }
-  }catch{}
+  for(const candidate of scientificNameVariants(query)){
+    try{
+      const direct=choose(await occurrenceSearch({scientificName:candidate}));
+      if(direct){
+        memoryCache.set(key,direct);
+        return direct;
+      }
+    }catch{}
+  }
 
   // Resolve the GBIF accepted taxon key so media published under synonyms or
   // alternate combinations can still be discovered.
   try{
-    const matchParams=new URLSearchParams({name:query,verbose:"true"});
+    const matchName=scientificNameVariants(query).at(-1)||query;
+    const matchParams=new URLSearchParams({name:matchName,verbose:"true"});
     const match=await fetchJsonWithRetry(
       `https://api.gbif.org/v1/species/match?${matchParams}`,
       "GBIF species match",
@@ -435,24 +466,78 @@ export async function searchIDigBioImage(scientificName,{rank=""}={}) {
   return null;
 }
 
-export async function searchINaturalistImage(scientificName,{allowDescendant=false}={}) {
+const inaturalistTaxonCache=new Map();
+
+async function resolveINaturalistTaxon(scientificName,{rank=""}={}) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+  const key=`${String(rank||"").toLowerCase()}:${comparableScientificName(query)}`;
+  if(inaturalistTaxonCache.has(key))return inaturalistTaxonCache.get(key);
+
+  const wanted=comparableScientificName(query);
+  const variants=scientificNameVariants(query);
+
+  for(const candidate of variants){
+    await throttleINaturalist();
+    try{
+      const params=new URLSearchParams({
+        q:candidate,
+        per_page:"30",
+      });
+      const json=await fetchJsonWithRetry(
+        `https://api.inaturalist.org/v1/taxa/autocomplete?${params}`,
+        "iNaturalist taxa",
+        10000
+      );
+
+      const results=json?.results??[];
+      const exact=results.find((item)=>
+        comparableScientificName(item?.name||"")===wanted
+      )||results.find((item)=>
+        comparableScientificName(item?.matched_term||"")===wanted
+      );
+
+      if(exact?.id){
+        const value={
+          id:Number(exact.id),
+          name:String(exact.name||candidate),
+          rank:String(exact.rank||rank||""),
+        };
+        inaturalistTaxonCache.set(key,value);
+        return value;
+      }
+    }catch{}
+  }
+
+  inaturalistTaxonCache.set(key,null);
+  return null;
+}
+
+export async function searchINaturalistImage(scientificName,{allowDescendant=false,rank=""}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
 
-  const key=`inat:${allowDescendant?"desc:":"exact:"}${query.toLowerCase()}`;
+  const key=`inat:${allowDescendant?"desc:":"exact:"}${String(rank||"").toLowerCase()}:${comparableScientificName(query)}`;
   if(memoryCache.has(key))return memoryCache.get(key);
+
+  const target=await resolveINaturalistTaxon(query,{rank});
+  const variants=scientificNameVariants(query);
+  const candidateName=target?.name||variants.at(-1)||query;
 
   await throttleINaturalist();
 
   const params=new URLSearchParams({
-    taxon_name:query,
     photos:"true",
     quality_grade:"research",
+    captive:"false",
     photo_license:"cc0,cc-by,cc-by-sa",
-    per_page:"30",
+    per_page:"60",
     order:"desc",
     order_by:"votes",
   });
+
+  if(target?.id)params.set("taxon_id",String(target.id));
+  else params.set("taxon_name",candidateName);
 
   let json=null;
   try{
@@ -466,13 +551,25 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
     return null;
   }
 
-  const canonical=normalizeScientificName(query);
-  for(const observation of json?.results??[]){
-    const observedName=normalizeScientificName(observation?.taxon?.name||"");
-    const exact=observedName===canonical;
-    if(!exact&&!allowDescendant)continue;
+  const wanted=comparableScientificName(target?.name||query);
 
-    for(const photo of observation.photos??[]){
+  for(const observation of json?.results??[]){
+    if(observation?.captive===true)continue;
+
+    const observedName=comparableScientificName(observation?.taxon?.name||"");
+    const exact=
+      observedName===wanted ||
+      observedName.startsWith(wanted+" ");
+
+    if(!allowDescendant&&!exact)continue;
+
+    const photos=[...(observation.photos??[])].sort((a,b)=>{
+      const aa=(a?.original_dimensions?.width||0)*(a?.original_dimensions?.height||0);
+      const bb=(b?.original_dimensions?.width||0)*(b?.original_dimensions?.height||0);
+      return bb-aa;
+    });
+
+    for(const photo of photos){
       const license=String(photo.license_code||"").toLowerCase();
       if(!acceptedOpenLicense(license))continue;
       const imageUrl=largeINaturalistPhotoUrl(photo.url);
@@ -488,7 +585,7 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
       const result={
         imageUrl,
         originalUrl:observation.uri||`https://www.inaturalist.org/observations/${observation.id}`,
-        title:observation?.taxon?.name||query,
+        title:observation?.taxon?.name||target?.name||query,
         creator,
         license:license.toUpperCase(),
         licenseUrl:
@@ -498,6 +595,7 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
         attribution:creator,
         source:"iNaturalist research-grade observation",
         observationId:observation.id||null,
+        inaturalistTaxonId:target?.id||observation?.taxon?.id||null,
         mediaMatch:exact?"EXACT":"REPRESENTATIVE_DESCENDANT",
       };
       memoryCache.set(key,result);
@@ -598,7 +696,7 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
   // observations and is a much better gameplay image than museum drawers.
   if(speciesLike&&!extinct){
     try{
-      const inat=await searchINaturalistImage(query,{allowDescendant:false});
+      const inat=await searchINaturalistImage(query,{allowDescendant:false,rank});
       if(inat)return {
         ...inat,
         resolver:"inaturalist-exact-wild",
@@ -624,7 +722,7 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
   // descendant is preferable to fossils, diagrams or arbitrary page images.
   if(!speciesLike){
     try{
-      const inat=await searchINaturalistImage(query,{allowDescendant:true});
+      const inat=await searchINaturalistImage(query,{allowDescendant:true,rank});
       if(inat)return {
         ...inat,
         resolver:"inaturalist-taxon-representative",
