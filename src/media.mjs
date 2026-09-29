@@ -68,19 +68,21 @@ export async function getCommonsFileMetadata(fileName) {
   return result;
 }
 
-export async function searchCommonsImage(query) {
-  const key = `search:${String(query || "").trim().toLowerCase()}`;
-  if (key === "search:") return null;
+export async function searchCommonsImage(query, { exact = false } = {}) {
+  const normalized=String(query || "").trim();
+  const key = `search:${exact?"exact:":"broad:"}${normalized.toLowerCase()}`;
+  if (!normalized) return null;
   if (memoryCache.has(key)) return memoryCache.get(key);
 
+  const searchExpression = exact ? `intitle:"${normalized.replaceAll('"', '')}"` : normalized;
   const params = new URLSearchParams({
     action: "query",
     format: "json",
     origin: "*",
     generator: "search",
-    gsrsearch: String(query),
+    gsrsearch: searchExpression,
     gsrnamespace: "6",
-    gsrlimit: "8",
+    gsrlimit: exact ? "12" : "6",
     prop: "imageinfo",
     iiprop: "url|extmetadata",
     iiextmetadatafilter: "Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
@@ -89,7 +91,12 @@ export async function searchCommonsImage(query) {
 
   const json = await commonsQuery(params);
   const pages = Object.values(json?.query?.pages ?? {});
+  const needle=normalized.toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
   for (const page of pages) {
+    if(exact){
+      const title=String(page.title||"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+      if(!needle.split(/\s+/).every(token=>title.includes(token)))continue;
+    }
     const result = mediaFromPage(page);
     if (!result) continue;
     memoryCache.set(key, result);
@@ -127,7 +134,7 @@ export async function searchGbifImage(scientificName) {
     scientificName: query,
     mediaType: "StillImage",
     occurrenceStatus: "present",
-    limit: "20",
+    limit: "30",
   });
 
   const response = await fetch(`https://api.gbif.org/v1/occurrence/search?${params}`, {
@@ -137,7 +144,10 @@ export async function searchGbifImage(scientificName) {
   if (!response.ok) throw new Error(`GBIF returned ${response.status}`);
   const json = await response.json();
 
+  const canonical = query.toLowerCase().replace(/\s+/g," ").trim();
   for (const occurrence of json?.results ?? []) {
+    const occurrenceName=String(occurrence.species||occurrence.scientificName||"").toLowerCase().replace(/\s+/g," ").trim();
+    if(!occurrenceName.startsWith(canonical))continue;
     for (const item of occurrence.media ?? []) {
       const identifier = item.identifier || item.references;
       const license = item.license || "";
