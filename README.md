@@ -23,7 +23,13 @@ LifeCards is a proprietary, self-hostable collectible-card game built around the
   - database-enforced one-of-one
 - collection
 - interactive Tree of Life album
-- Codex
+- Codex with live scientific enrichment
+- Wikipedia overview data
+- Wikimedia Commons photography with creator/license attribution
+- NCBI Taxonomy identifiers + direct Lifemap deep links
+- persistent external-data cache
+- collector profile + achievements
+- Knowledge Lab with taxonomy questions and progression
 - fixed-price market with a 5% coin sink
 - Wikimedia Commons image lookup with attribution metadata
 - Docker, tests, RNG simulation and GitHub CI
@@ -56,6 +62,14 @@ Run an economy/RNG simulation:
 ```bash
 node scripts/simulate.mjs 20000
 ```
+
+Warm the local scientific/media cache for the seed catalog:
+
+```bash
+npm run enrich
+```
+
+This resolves Wikipedia summaries, NCBI Taxonomy IDs, Lifemap deep links and licensed Wikimedia Commons images. An optional `NCBI_API_KEY` can be set for higher NCBI API throughput.
 
 ## LUCA development mode
 
