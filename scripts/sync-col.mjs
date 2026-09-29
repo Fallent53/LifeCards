@@ -324,7 +324,7 @@ db.exec(`
   GROUP BY rarity;
 
   CREATE INDEX drop_pool_taxon_idx ON drop_pool(taxon_id);
-  ` : ""}
+  `}
 `);
 
 console.log("Calculating descendant species counts for radial map weighting…");
