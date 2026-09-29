@@ -41,7 +41,7 @@ function mapRow(row) {
     parentId: row.parent_id ? String(row.parent_id) : null,
     scientificName: row.scientific_name,
     canonicalName: row.canonical_name || row.scientific_name,
-    commonName: row.canonical_name || row.scientific_name,
+    commonName: row.common_name || row.canonical_name || row.scientific_name,
     rank: row.rank || "unranked",
     status: row.status || "accepted",
     extinct: Boolean(row.extinct),
@@ -118,7 +118,7 @@ export function getTaxon(id) {
   const db = openFullDb();
   if (!db) return seedDefinition(String(id));
   const row = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
     FROM taxa WHERE id = ?
   `).get(String(id));
   return mapRow(row);
@@ -142,22 +142,25 @@ export function searchTaxa(query, limit = 30) {
   const prefix = `${q}%`;
   const contains = `%${q}%`;
   const rows = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
     FROM taxa
     WHERE scientific_name LIKE ? COLLATE NOCASE
        OR canonical_name LIKE ? COLLATE NOCASE
+       OR common_name LIKE ? COLLATE NOCASE
     ORDER BY
       CASE
         WHEN scientific_name = ? COLLATE NOCASE THEN 0
         WHEN canonical_name = ? COLLATE NOCASE THEN 0
+        WHEN common_name = ? COLLATE NOCASE THEN 0
         WHEN scientific_name LIKE ? COLLATE NOCASE THEN 1
         WHEN canonical_name LIKE ? COLLATE NOCASE THEN 1
+        WHEN common_name LIKE ? COLLATE NOCASE THEN 1
         ELSE 2
       END,
       LENGTH(scientific_name),
       scientific_name
     LIMIT ?
-  `).all(contains, contains, q, q, prefix, prefix, safeLimit);
+  `).all(contains, contains, contains, q, q, q, prefix, prefix, prefix, safeLimit);
   return rows.map(mapRow);
 }
 
@@ -171,7 +174,7 @@ export function getChildren(id, limit = 120) {
   }
 
   const rows = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
     FROM taxa
     WHERE parent_id = ?
     ORDER BY child_count DESC, rank, scientific_name
@@ -201,7 +204,7 @@ export function getPath(id, maxDepth = 64) {
   for (let i = 0; i < maxDepth && currentId && !seen.has(currentId); i += 1) {
     seen.add(currentId);
     const row = db.prepare(`
-      SELECT id,parent_id,scientific_name,canonical_name,rank,status,extinct,child_count
+      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
       FROM taxa WHERE id = ?
     `).get(currentId);
     if (!row) break;
