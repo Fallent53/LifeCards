@@ -27,9 +27,15 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v14-real-genus-representatives";
+const AUDIT_RESOLVER_VERSION="v15-exact-natural-media";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
+const auditCollection=args.get("collection")==="true";
+const lifecardsPath=resolve(
+  args.get("lifecards")||
+  process.env.LIFECARDS_DB_PATH||
+  "./data/lifecards.sqlite"
+);
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
 const limit=auditAll?Number.MAX_SAFE_INTEGER:Math.max(1,Number(args.get("limit")||defaultBatch));
 const concurrency=Math.max(1,Math.min(6,Number(args.get("concurrency")||process.env.LIFECARDS_AUDIT_CONCURRENCY||3)));
@@ -142,128 +148,95 @@ function totalDroppable(){
 
 function stats(){
   const total=totalDroppable();
-  const rows=taxonomy.prepare(`
-    SELECT q.status AS status, COUNT(*) AS count
-    FROM drop_pool p
-    JOIN qualitydb.card_quality q ON q.taxon_id = p.taxon_id
-    WHERE q.resolver_version = ?
-    GROUP BY q.status
-    ORDER BY q.status
-  `).all(AUDIT_RESOLVER_VERSION);
+  let rows=[];
 
-  const byStatus=Object.fromEntries(rows.map(row=>[row.status,Number(row.count)]));
-  const checked=Object.values(byStatus).reduce((a,b)=>a+b,0);
-  return {
-    totalDroppable:total,
-    checked,
-    unchecked:Math.max(0,total-checked),
-    ready:byStatus.READY||0,
-    review:byStatus.REVIEW||0,
-    noImage:byStatus.NO_IMAGE||0,
-    badData:byStatus.BAD_DATA||0,
-    error:byStatus.ERROR||0,
-    complete:total>0&&checked>=total,
-    byStatus,
-    resolverVersion:AUDIT_RESOLVER_VERSION,
-    taxonomyScope:taxonomyMeta("scope")||"unknown",
-    taxonomyDataset:taxonomyMeta("dataset_key")||"unknown",
-    taxonomyImportedAt:taxonomyMeta("imported_at")||null,
-  };
-}
-
-function reasonBreakdown(status){
-  return taxonomy.prepare(`
-    SELECT q.reason AS reason, COUNT(*) AS count
-    FROM drop_pool p
-    JOIN qualitydb.card_quality q ON q.taxon_id=p.taxon_id
-    WHERE q.resolver_version=? AND q.status=?
-    GROUP BY q.reason
-    ORDER BY count DESC, q.reason
-    LIMIT 12
-  `).all(AUDIT_RESOLVER_VERSION,status);
-}
-
-function printStats(label="Card quality"){
-  const value=stats();
-  console.log("");
-  console.log(label);
-  console.log("─".repeat(52));
-  console.log(`Droppable taxa : ${value.totalDroppable.toLocaleString()}`);
-  console.log(`Checked        : ${value.checked.toLocaleString()}`);
-  console.log(`READY          : ${value.ready.toLocaleString()}`);
-  console.log(`REVIEW         : ${value.review.toLocaleString()}`);
-  console.log(`NO_IMAGE       : ${value.noImage.toLocaleString()}`);
-  console.log(`BAD_DATA       : ${value.badData.toLocaleString()}`);
-  console.log(`ERROR          : ${value.error.toLocaleString()}`);
-  console.log(`Unchecked      : ${value.unchecked.toLocaleString()}`);
-  console.log(`Complete       : ${value.complete?"yes":"no"}`);
-
-  if(value.review){
-    console.log("");
-    console.log("Top REVIEW reasons");
-    console.log("─".repeat(52));
-    for(const row of reasonBreakdown("REVIEW")){
-      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
-    }
+if(auditCollection){
+  if(!existsSync(lifecardsPath)){
+    console.error("LifeCards collection database not found:",lifecardsPath);
+    taxonomy.close();
+    quality.close();
+    process.exit(3);
   }
 
-  if(value.noImage){
-    console.log("");
-    console.log("Top NO_IMAGE reasons");
-    console.log("─".repeat(52));
-    for(const row of reasonBreakdown("NO_IMAGE")){
-      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
-    }
+  const lifecards=new DatabaseSync(lifecardsPath,{readOnly:true});
+  lifecards.exec("PRAGMA query_only=ON;");
+  const ownedNames=lifecards.prepare(`
+    SELECT DISTINCT scientific_name
+    FROM cards
+    WHERE scientific_name IS NOT NULL AND trim(scientific_name)<>''
+  `).all().map((row)=>String(row.scientific_name));
+  lifecards.close();
+
+  const selected=[];
+  const byName=taxonomy.prepare(`
+    SELECT
+      p.taxon_id AS id,
+      p.rarity,
+      t.scientific_name,
+      t.canonical_name,
+      t.common_name,
+      t.authorship,
+      t.rank,
+      t.extinct,
+      t.status AS taxonomic_status
+    FROM taxa t
+    JOIN drop_pool p ON p.taxon_id=t.id
+    WHERE t.scientific_name=? COLLATE NOCASE
+       OR t.canonical_name=? COLLATE NOCASE
+    ORDER BY CASE WHEN t.scientific_name=? COLLATE NOCASE THEN 0 ELSE 1 END
+    LIMIT 1
+  `);
+
+  for(const name of ownedNames){
+    const row=byName.get(name,name,name);
+    if(row)selected.push(row);
   }
 
-  return value;
-}
-
-if(statusOnly){
-  const value=printStats();
-  writeFileSync(reportPath,JSON.stringify({
-    generatedAt:new Date().toISOString(),
-    taxonomyPath,
-    qualityPath,
-    ...value,
-  },null,2));
-  taxonomy.close();
-  quality.close();
-  process.exit(0);
-}
-
-const rows=taxonomy.prepare(`
-  SELECT
-    p.taxon_id AS id,
-    p.rarity,
-    t.scientific_name,
-    t.canonical_name,
-    t.common_name,
-    t.authorship,
-    t.rank,
-    t.status AS taxonomic_status
-  FROM drop_pool p
-  JOIN taxa t ON t.id=p.taxon_id
-  WHERE p.taxon_id NOT IN (
-    SELECT taxon_id
+  const current=taxonomy.prepare(`
+    SELECT taxon_id,status
     FROM qualitydb.card_quality
-    WHERE resolver_version = ? AND status <> 'ERROR'
-  )
-  ORDER BY
-    CASE lower(t.rank)
-      WHEN 'species' THEN 1
-      WHEN 'genus' THEN 2
-      WHEN 'family' THEN 3
-      WHEN 'order' THEN 4
-      WHEN 'class' THEN 5
-      WHEN 'phylum' THEN 6
-      WHEN 'kingdom' THEN 7
-      WHEN 'domain' THEN 8
-      ELSE 9
-    END,
-    p.slot
-  LIMIT ?
-`).all(AUDIT_RESOLVER_VERSION,limit);
+    WHERE resolver_version=?
+  `).all(AUDIT_RESOLVER_VERSION);
+  const done=new Map(current.map((row)=>[String(row.taxon_id),String(row.status)]));
+
+  rows=selected
+    .filter((row)=>!done.has(String(row.id))||done.get(String(row.id))==="ERROR")
+    .slice(0,limit);
+}else{
+  rows=taxonomy.prepare(`
+    SELECT
+      p.taxon_id AS id,
+      p.rarity,
+      t.scientific_name,
+      t.canonical_name,
+      t.common_name,
+      t.authorship,
+      t.rank,
+      t.extinct,
+      t.status AS taxonomic_status
+    FROM drop_pool p
+    JOIN taxa t ON t.id=p.taxon_id
+    WHERE p.taxon_id NOT IN (
+      SELECT taxon_id
+      FROM qualitydb.card_quality
+      WHERE resolver_version = ? AND status <> 'ERROR'
+    )
+    ORDER BY
+      CASE lower(t.rank)
+        WHEN 'species' THEN 1
+        WHEN 'genus' THEN 2
+        WHEN 'family' THEN 3
+        WHEN 'order' THEN 4
+        WHEN 'class' THEN 5
+        WHEN 'phylum' THEN 6
+        WHEN 'kingdom' THEN 7
+        WHEN 'domain' THEN 8
+        ELSE 9
+      END,
+      p.slot
+    LIMIT ?
+  `).all(AUDIT_RESOLVER_VERSION,limit);
+}
 
 if(!rows.length){
   printStats("Nothing left to audit");
@@ -332,6 +305,15 @@ function classify(row,knowledge){
     return {status:"REVIEW",reason:"non-photographic media rejected for gameplay"};
   }
 
+  if(
+    !Boolean(row.extinct) &&
+    /museum specimen|preserved specimen|fossil specimen/i.test(
+      [media.source,media.title,media.resolver].filter(Boolean).join(" ")
+    )
+  ){
+    return {status:"REVIEW",reason:"specimen-only media rejected for extant gameplay"};
+  }
+
   const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
   if(!requiredAttribution){
     return {status:"REVIEW",reason:"image found but attribution metadata incomplete"};
@@ -385,6 +367,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
     id:String(row.id),
     query:cleanAuditQuery(row),
     rank:String(row.rank||""),
+    extinct:Boolean(row.extinct),
   }));
 
   let resolved={};
