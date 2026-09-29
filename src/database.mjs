@@ -48,7 +48,7 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS cards_owner_idx ON cards(owner_id, created_at DESC);
     CREATE TABLE IF NOT EXISTS listings (
       id TEXT PRIMARY KEY,
-      card_id TEXT NOT NULL UNIQUE,
+      card_id TEXT NOT NULL,
       seller_id TEXT NOT NULL,
       price INTEGER NOT NULL CHECK(price > 0),
       status TEXT NOT NULL DEFAULT 'ACTIVE',
@@ -60,6 +60,50 @@ export function migrate() {
       FOREIGN KEY(buyer_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
+  `);
+
+  const listingSql = String(
+    db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='listings'").get()?.sql || ""
+  );
+  if (/card_id\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(listingSql)) {
+    db.exec("PRAGMA foreign_keys=OFF");
+    try {
+      db.exec(`
+        BEGIN;
+        ALTER TABLE listings RENAME TO listings_legacy;
+        CREATE TABLE listings (
+          id TEXT PRIMARY KEY,
+          card_id TEXT NOT NULL,
+          seller_id TEXT NOT NULL,
+          price INTEGER NOT NULL CHECK(price > 0),
+          status TEXT NOT NULL DEFAULT 'ACTIVE',
+          buyer_id TEXT,
+          created_at INTEGER NOT NULL,
+          sold_at INTEGER,
+          FOREIGN KEY(card_id) REFERENCES cards(id),
+          FOREIGN KEY(seller_id) REFERENCES users(id),
+          FOREIGN KEY(buyer_id) REFERENCES users(id)
+        );
+        INSERT INTO listings(id,card_id,seller_id,price,status,buyer_id,created_at,sold_at)
+        SELECT id,card_id,seller_id,price,status,buyer_id,created_at,sold_at
+        FROM listings_legacy;
+        DROP TABLE listings_legacy;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { db.exec("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      db.exec("PRAGMA foreign_keys=ON");
+    }
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS listings_seller_idx ON listings(seller_id, status, created_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS listings_active_card_idx
+      ON listings(card_id)
+      WHERE status = 'ACTIVE';
   `);
 
   const cardColumns = new Set(db.prepare("PRAGMA table_info(cards)").all().map((row) => row.name));
@@ -544,6 +588,20 @@ export function createListing(userId, cardId, price) {
   db.prepare("INSERT INTO listings (id, card_id, seller_id, price, status, created_at) VALUES (?, ?, ?, ?, 'ACTIVE', ?)")
     .run(id, cardId, userId, price, nowMs());
   return getListing(id);
+}
+
+export function cancelListing(userId, listingId) {
+  migrate(); ensureUser(userId);
+  const listing = db.prepare(
+    "SELECT id FROM listings WHERE id = ? AND seller_id = ? AND status = 'ACTIVE'"
+  ).get(String(listingId), userId);
+  if (!listing) throw new Error("Active listing not owned by seller");
+
+  db.prepare(
+    "UPDATE listings SET status = 'CANCELLED' WHERE id = ? AND seller_id = ? AND status = 'ACTIVE'"
+  ).run(String(listingId), userId);
+
+  return { id: String(listingId), status: "CANCELLED" };
 }
 
 export function buyListing(userId, listingId) {
