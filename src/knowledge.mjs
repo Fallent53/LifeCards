@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, searchCommonsImage } from "./media.mjs";
+import { getCommonsFileMetadata, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v3";
@@ -181,6 +181,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     async () => wikidataImage ? getCommonsFileMetadata(wikidataImage) : null,
     async () => searchCommonsImage(taxonName),
     async () => normalized !== taxonName ? searchCommonsImage(normalized) : null,
+    async () => searchGbifImage(taxonName),
   ];
   for (const attempt of mediaAttempts) {
     if (media) break;
@@ -222,7 +223,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     sources: [
       page ? "Wikipedia" : null,
       entity ? "Wikidata" : null,
-      media ? "Wikimedia Commons" : null,
+      media ? media.source : null,
       taxId ? "NCBI Taxonomy / Lifemap NCBI" : null,
     ].filter(Boolean),
     sourceStatus: {
