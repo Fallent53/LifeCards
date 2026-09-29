@@ -65,6 +65,49 @@ npm run sync:knowledge
 
 Card detail views resolve Wikipedia summaries, Wikidata entity IDs and NCBI Taxonomy IDs. When a taxid is available, LifeCards exposes a direct **View in Lifemap** deep-link to the matching node in Lifemap NCBI.
 
+## Full Catalogue of Life taxonomy
+
+LifeCards can use a local Catalogue of Life database instead of shipping millions of taxa in Git.
+
+```bash
+npm install
+npm run sync:col
+```
+
+This downloads the pinned Catalogue of Life Extended Release from ChecklistBank, keeps accepted **Animalia** taxa, imports the hierarchy into `data/animalia.sqlite`, adds direct-child counts, and imports preferred vernacular names when the DwCA release provides them.
+
+After the import, restart LifeCards:
+
+```bash
+npm start
+```
+
+The Tree of Life and Codex automatically switch from the small seed catalog to the local CoL database. The UI never tries to render millions of nodes simultaneously: it loads a bounded radial subtree around the branch being explored.
+
+To import the entire Catalogue of Life instead of only Animalia:
+
+```bash
+npm run sync:col:all
+```
+
+You can pin a different ChecklistBank release with `COL_DATASET_KEY` or `--dataset`. The default dataset key is documented in `scripts/sync-col.mjs` and should be updated deliberately when moving to a new scientific snapshot.
+
+### Images
+
+For a taxon opened in the UI, LifeCards resolves imagery lazily in this order:
+
+1. lead image from Wikipedia;
+2. Wikidata P18 image;
+3. Wikimedia Commons search;
+4. LifeCards graphical fallback.
+
+A Commons image is only used when its machine-readable metadata indicates an accepted reusable license. Some described species have no suitable freely licensed image, so a scientifically honest fallback remains necessary.
+
+### Radial Tree
+
+The Tree view is a proprietary radial renderer. It does not copy Lifemap code or assets. It supports zoom, pan, branch drill-down, full-taxonomy search, breadcrumbs, and outbound Lifemap/NCBI links when a Wikidata NCBI taxonomy ID can be resolved.
+
+
 ## LUCA development mode
 
 Production-intent default:
