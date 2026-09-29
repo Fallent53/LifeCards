@@ -60,6 +60,17 @@ export function migrate() {
       FOREIGN KEY(buyer_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
+    CREATE TABLE IF NOT EXISTS pack_audits (
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      id TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL,
+      opened_at INTEGER NOT NULL,
+      previous_hash TEXT,
+      payload_json TEXT NOT NULL,
+      entry_hash TEXT NOT NULL UNIQUE,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS pack_audits_user_idx ON pack_audits(user_id, sequence DESC);
   `);
 
   const listingSql = String(
@@ -115,6 +126,9 @@ export function migrate() {
   }
   if (!cardColumns.has("scientific_name")) {
     db.exec("ALTER TABLE cards ADD COLUMN scientific_name TEXT");
+  }
+  if (!cardColumns.has("pack_audit_id")) {
+    db.exec("ALTER TABLE cards ADD COLUMN pack_audit_id TEXT");
   }
 
   db.exec(`
@@ -209,13 +223,13 @@ function allocateSerial(definition, edition) {
   return serial;
 }
 
-function issueDefinition(ownerId, definition, finish) {
+function issueDefinition(ownerId, definition, finish, packAuditId = null) {
   const edition = chooseEdition(definition);
   const serial = allocateSerial(definition, edition);
   const id = uuid();
   db.prepare(`INSERT INTO cards
-    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at, definition_json, common_name, scientific_name)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at, definition_json, common_name, scientific_name, pack_audit_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(
       id,
       definition.id,
@@ -229,15 +243,16 @@ function issueDefinition(ownerId, definition, finish) {
       nowMs(),
       JSON.stringify(definition),
       definition.commonName || definition.id,
-      definition.scientificName || definition.commonName || definition.id
+      definition.scientificName || definition.commonName || definition.id,
+      packAuditId
     );
   return hydrateCard(db.prepare("SELECT * FROM cards WHERE id = ?").get(id));
 }
 
-function issueLuca(ownerId) {
+function issueLuca(ownerId, packAuditId = null) {
   const definition = byId.get("luca");
   if (supplyCount("luca", "ORIGIN") >= 1) return null;
-  return issueDefinition(ownerId, definition, "ORIGIN");
+  return issueDefinition(ownerId, definition, "ORIGIN", packAuditId);
 }
 
 function hydrateCard(row) {
@@ -258,7 +273,150 @@ function hydrateCard(row) {
     rarity: row.rarity,
     kind: row.kind,
     createdAt: Number(row.created_at),
+    packAuditId: row.pack_audit_id || null,
     definition,
+  };
+}
+
+function auditCardSnapshot(card) {
+  if (!card) return null;
+  return {
+    cardId: card.id,
+    definitionId: card.definitionId,
+    edition: card.edition,
+    serial: card.serial,
+    serialCap: card.serialCap,
+    finish: card.finish,
+    rarity: card.rarity,
+    kind: card.kind,
+  };
+}
+
+function packAuditHash(previousHash, payloadJson) {
+  return crypto
+    .createHash("sha256")
+    .update("lifecards-pack-audit-v1\n")
+    .update(previousHash || "GENESIS")
+    .update("\n")
+    .update(payloadJson)
+    .digest("hex");
+}
+
+function appendPackAudit({ id, userId, openedAt, cards, originCard, config }) {
+  const previous = db.prepare(
+    "SELECT sequence, entry_hash FROM pack_audits ORDER BY sequence DESC LIMIT 1"
+  ).get();
+  const payload = {
+    version: 1,
+    packId: id,
+    userId,
+    openedAt,
+    cards: cards.map(auditCardSnapshot),
+    originCard: auditCardSnapshot(originCard),
+    config: {
+      cardsPerPack: Number(config.cardsPerPack),
+      holoRate: Number(config.holoRate),
+      lucaDenominator: Number(config.lucaDenominator),
+    },
+  };
+  const payloadJson = JSON.stringify(payload);
+  const previousHash = previous?.entry_hash || null;
+  const entryHash = packAuditHash(previousHash, payloadJson);
+
+  db.prepare(`
+    INSERT INTO pack_audits(id,user_id,opened_at,previous_hash,payload_json,entry_hash)
+    VALUES (?,?,?,?,?,?)
+  `).run(id, userId, openedAt, previousHash, payloadJson, entryHash);
+
+  const row = db.prepare(
+    "SELECT sequence,id,opened_at,previous_hash,entry_hash FROM pack_audits WHERE id = ?"
+  ).get(id);
+
+  return {
+    sequence: Number(row.sequence),
+    id: row.id,
+    openedAt: Number(row.opened_at),
+    previousHash: row.previous_hash || null,
+    hash: row.entry_hash,
+  };
+}
+
+export function getAuditHead() {
+  migrate();
+  const row = db.prepare(
+    "SELECT sequence,id,opened_at,previous_hash,entry_hash FROM pack_audits ORDER BY sequence DESC LIMIT 1"
+  ).get();
+  return row
+    ? {
+        sequence: Number(row.sequence),
+        id: row.id,
+        openedAt: Number(row.opened_at),
+        previousHash: row.previous_hash || null,
+        hash: row.entry_hash,
+      }
+    : {
+        sequence: 0,
+        id: null,
+        openedAt: null,
+        previousHash: null,
+        hash: null,
+      };
+}
+
+export function getPackAuditForUser(userId, auditId) {
+  migrate(); ensureUser(userId);
+  const row = db.prepare(`
+    SELECT sequence,id,user_id,opened_at,previous_hash,payload_json,entry_hash
+    FROM pack_audits
+    WHERE id = ? AND user_id = ?
+  `).get(String(auditId), String(userId));
+  if (!row) return null;
+
+  let payload = null;
+  try { payload = JSON.parse(row.payload_json); } catch {}
+
+  return {
+    sequence: Number(row.sequence),
+    id: row.id,
+    openedAt: Number(row.opened_at),
+    previousHash: row.previous_hash || null,
+    hash: row.entry_hash,
+    payload,
+  };
+}
+
+export function verifyPackAuditChain() {
+  migrate();
+  const rows = db.prepare(`
+    SELECT sequence,previous_hash,payload_json,entry_hash
+    FROM pack_audits
+    ORDER BY sequence ASC
+  `).all();
+
+  let previousHash = null;
+  for (const row of rows) {
+    if ((row.previous_hash || null) !== previousHash) {
+      return {
+        valid: false,
+        brokenAt: Number(row.sequence),
+        reason: "previous_hash_mismatch",
+      };
+    }
+    const expected = packAuditHash(previousHash, row.payload_json);
+    if (expected !== row.entry_hash) {
+      return {
+        valid: false,
+        brokenAt: Number(row.sequence),
+        reason: "entry_hash_mismatch",
+      };
+    }
+    previousHash = row.entry_hash;
+  }
+
+  return {
+    valid: true,
+    length: rows.length,
+    headHash: previousHash,
   };
 }
 
@@ -271,7 +429,9 @@ export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cr
     if (user.pack_balance < 1) throw new Error("No pack available yet");
     const wasFull = user.pack_balance >= config.maxStoredPacks;
     const nextBalance = user.pack_balance - 1;
-    const anchor = wasFull ? nowMs() : user.pack_anchor_at;
+    const openedAt = nowMs();
+    const packAuditId = uuid();
+    const anchor = wasFull ? openedAt : user.pack_anchor_at;
     db.prepare("UPDATE users SET pack_balance = ?, pack_anchor_at = ? WHERE id = ?")
       .run(nextBalance, anchor, userId);
 
@@ -283,11 +443,19 @@ export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cr
     const cards = blueprint.cards.map((slot) => {
       const definition = resolveDefinition(slot.definitionId);
       if (!definition) throw new Error(`Unknown card definition ${slot.definitionId}`);
-      return issueDefinition(userId, definition, slot.finish);
+      return issueDefinition(userId, definition, slot.finish, packAuditId);
     });
-    const originCard = blueprint.originTriggered ? issueLuca(userId) : null;
+    const originCard = blueprint.originTriggered ? issueLuca(userId, packAuditId) : null;
+    const audit = appendPackAudit({
+      id: packAuditId,
+      userId,
+      openedAt,
+      cards,
+      originCard,
+      config,
+    });
     db.exec("COMMIT");
-    return { cards, originCard };
+    return { cards, originCard, audit };
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
@@ -697,10 +865,25 @@ export function getCardProvenance(cardId) {
     })),
   ];
 
+  const audit = card.pack_audit_id
+    ? db.prepare(
+        "SELECT sequence,id,opened_at,previous_hash,entry_hash FROM pack_audits WHERE id = ?"
+      ).get(card.pack_audit_id)
+    : null;
+
   return {
     cardId: String(card.id),
     currentOwnerId: card.owner_id,
     transferCount: sold.length,
+    issueAudit: audit
+      ? {
+          sequence: Number(audit.sequence),
+          id: audit.id,
+          openedAt: Number(audit.opened_at),
+          previousHash: audit.previous_hash || null,
+          hash: audit.entry_hash,
+        }
+      : null,
     events,
   };
 }
@@ -768,7 +951,7 @@ export function seedDemoMarket() {
 }
 
 export function resetForTests() {
-  db.exec("DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
+  db.exec("DELETE FROM listings; DELETE FROM cards; DELETE FROM pack_audits; DELETE FROM supplies; DELETE FROM users;");
 }
 
 migrate();
