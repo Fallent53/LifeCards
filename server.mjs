@@ -195,6 +195,31 @@ async function api(request, response, url) {
       const limit = Number(url.searchParams.get("limit") || 30);
       return json(response, 200, await effectiveSearchTaxa(query, limit));
     }
+    if (request.method === "GET" && url.pathname === "/api/taxonomy/resolve") {
+      const query = String(url.searchParams.get("q") || "").trim();
+      if (!query) return json(response, 200, { taxon: null, path: [], taxonomy: effectiveTaxonomyStatus() });
+
+      const searched = await effectiveSearchTaxa(query, 12);
+      const needle = query.toLowerCase();
+      const candidates = searched.results || [];
+      const taxon =
+        candidates.find((item) => String(item.scientificName || "").toLowerCase() === needle) ||
+        candidates.find((item) => String(item.canonicalName || "").toLowerCase() === needle) ||
+        candidates.find((item) => String(item.commonName || "").toLowerCase() === needle) ||
+        candidates[0] ||
+        null;
+
+      if (!taxon) {
+        return json(response, 200, { taxon: null, path: [], taxonomy: searched.taxonomy || effectiveTaxonomyStatus() });
+      }
+
+      const resolved = await effectiveGetTaxon(taxon.id);
+      return json(response, 200, {
+        taxon: resolved.taxon || taxon,
+        path: resolved.path || [],
+        taxonomy: resolved.taxonomy || searched.taxonomy || effectiveTaxonomyStatus(),
+      });
+    }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/taxon") {
       const id = url.searchParams.get("id") || "";
       return json(response, 200, await effectiveGetTaxon(id));
