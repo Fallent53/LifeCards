@@ -186,6 +186,40 @@ export async function searchCommonsImage(query, { exact = false } = {}) {
 }
 
 
+function normalizeScientificName(value = "") {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function acceptedOpenLicense(value = "") {
+  const license=String(value||"").trim().toLowerCase();
+  if(!license)return false;
+  if(license==="cc0"||license==="cc-by"||license==="cc-by-sa")return true;
+  if(license.includes("creativecommons.org/publicdomain")||license.includes("creativecommons.org/zero"))return true;
+  if(license.includes("creativecommons.org/licenses/by/")||license.includes("creativecommons.org/licenses/by-sa/"))return true;
+  return false;
+}
+
+function largeINaturalistPhotoUrl(url = "") {
+  const value=String(url||"");
+  if(!value)return null;
+  return value
+    .replace("/square.", "/large.")
+    .replace("/small.", "/large.")
+    .replace("/medium.", "/large.");
+}
+
+let lastINaturalistRequestAt=0;
+async function throttleINaturalist() {
+  const elapsed=Date.now()-lastINaturalistRequestAt;
+  if(elapsed<1050){
+    await new Promise((resolve)=>setTimeout(resolve,1050-elapsed));
+  }
+  lastINaturalistRequestAt=Date.now();
+}
+
 function acceptedGbifMediaLicense(value = "") {
   const license = String(value).trim().toLowerCase();
   if (!license) return false;
@@ -202,52 +236,286 @@ function gbifImageUrl(recordKey, identifier) {
 }
 
 export async function searchGbifImage(scientificName) {
-  const query = String(scientificName || "").trim();
-  if (!query) return null;
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
 
-  const key = `gbif:${query.toLowerCase()}`;
-  if (memoryCache.has(key)) return memoryCache.get(key);
+  const key=`gbif:${query.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
 
-  const params = new URLSearchParams({
-    scientificName: query,
-    mediaType: "StillImage",
-    occurrenceStatus: "present",
-    limit: "30",
+  async function occurrenceSearch(paramsObject){
+    const params=new URLSearchParams({
+      mediaType:"StillImage",
+      occurrenceStatus:"present",
+      limit:"50",
+      ...paramsObject,
+    });
+    return fetchJsonWithRetry(
+      `https://api.gbif.org/v1/occurrence/search?${params}`,
+      "GBIF",
+      9000
+    );
+  }
+
+  function choose(json){
+    const canonical=normalizeScientificName(query);
+    for(const occurrence of json?.results??[]){
+      const occurrenceName=normalizeScientificName(
+        occurrence.acceptedScientificName||
+        occurrence.species||
+        occurrence.scientificName||
+        ""
+      );
+      if(!occurrenceName.startsWith(canonical))continue;
+
+      for(const item of occurrence.media??[]){
+        const identifier=item.identifier||item.references;
+        const license=item.license||"";
+        if(!identifier||!acceptedGbifMediaLicense(license))continue;
+
+        return {
+          imageUrl:gbifImageUrl(occurrence.key,identifier),
+          originalUrl:item.references||identifier,
+          title:occurrence.scientificName||query,
+          creator:cleanHtml(
+            item.creator||
+            item.rightsHolder||
+            occurrence.recordedBy||
+            occurrence.institutionCode||
+            occurrence.datasetTitle||
+            "GBIF contributor"
+          ),
+          license:cleanHtml(license),
+          licenseUrl:/^https?:/i.test(license)?license:null,
+          attribution:cleanHtml(
+            item.rightsHolder||
+            item.creator||
+            occurrence.institutionCode||
+            occurrence.datasetTitle||
+            "GBIF occurrence media"
+          ),
+          source:"GBIF occurrence media",
+          occurrenceKey:occurrence.key||null,
+          mediaMatch:"EXACT_OR_ACCEPTED",
+        };
+      }
+    }
+    return null;
+  }
+
+  try{
+    const direct=choose(await occurrenceSearch({scientificName:query}));
+    if(direct){
+      memoryCache.set(key,direct);
+      return direct;
+    }
+  }catch{}
+
+  // Resolve the GBIF accepted taxon key so media published under synonyms or
+  // alternate combinations can still be discovered.
+  try{
+    const matchParams=new URLSearchParams({name:query,verbose:"true"});
+    const match=await fetchJsonWithRetry(
+      `https://api.gbif.org/v1/species/match?${matchParams}`,
+      "GBIF species match",
+      8000
+    );
+    const acceptedKey=match?.acceptedUsageKey||match?.usageKey||null;
+    if(acceptedKey){
+      const accepted=choose(await occurrenceSearch({acceptedTaxonKey:String(acceptedKey)}));
+      if(accepted){
+        accepted.resolverHint="gbif-accepted-taxon";
+        memoryCache.set(key,accepted);
+        return accepted;
+      }
+    }
+  }catch{}
+
+  memoryCache.set(key,null);
+  return null;
+}
+
+export async function searchINaturalistImage(scientificName,{allowDescendant=false}={}) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+
+  const key=`inat:${allowDescendant?"desc:":"exact:"}${query.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  await throttleINaturalist();
+
+  const params=new URLSearchParams({
+    taxon_name:query,
+    photos:"true",
+    quality_grade:"research",
+    photo_license:"cc0,cc-by,cc-by-sa",
+    per_page:"30",
+    order:"desc",
+    order_by:"votes",
   });
 
-  const response = await fetch(`https://api.gbif.org/v1/occurrence/search?${params}`, {
-    signal: AbortSignal.timeout(4500),
-    headers: { "User-Agent": "LifeCards/0.1 (licensed media fallback)" },
-  });
-  if (!response.ok) throw new Error(`GBIF returned ${response.status}`);
-  const json = await response.json();
+  let json=null;
+  try{
+    json=await fetchJsonWithRetry(
+      `https://api.inaturalist.org/v1/observations?${params}`,
+      "iNaturalist",
+      10000
+    );
+  }catch{
+    memoryCache.set(key,null);
+    return null;
+  }
 
-  const canonical = query.toLowerCase().replace(/\s+/g," ").trim();
-  for (const occurrence of json?.results ?? []) {
-    const occurrenceName=String(occurrence.species||occurrence.scientificName||"").toLowerCase().replace(/\s+/g," ").trim();
-    if(!occurrenceName.startsWith(canonical))continue;
-    for (const item of occurrence.media ?? []) {
-      const identifier = item.identifier || item.references;
-      const license = item.license || "";
-      if (!identifier || !acceptedGbifMediaLicense(license)) continue;
+  const canonical=normalizeScientificName(query);
+  for(const observation of json?.results??[]){
+    const observedName=normalizeScientificName(observation?.taxon?.name||"");
+    const exact=observedName===canonical;
+    if(!exact&&!allowDescendant)continue;
 
-      const result = {
-        imageUrl: gbifImageUrl(occurrence.key, identifier),
-        originalUrl: item.references || identifier,
-        title: occurrence.scientificName || query,
-        creator: cleanHtml(item.creator || occurrence.recordedBy || "Unknown creator"),
-        license: cleanHtml(license),
-        licenseUrl: /^https?:/i.test(license) ? license : null,
-        attribution: cleanHtml(item.rightsHolder || item.creator || occurrence.datasetTitle || "GBIF occurrence media"),
-        source: "GBIF occurrence media",
-        occurrenceKey: occurrence.key || null,
+    for(const photo of observation.photos??[]){
+      const license=String(photo.license_code||"").toLowerCase();
+      if(!acceptedOpenLicense(license))continue;
+      const imageUrl=largeINaturalistPhotoUrl(photo.url);
+      if(!imageUrl)continue;
+
+      const creator=cleanHtml(
+        photo.attribution||
+        observation?.user?.name||
+        observation?.user?.login||
+        "iNaturalist contributor"
+      );
+
+      const result={
+        imageUrl,
+        originalUrl:observation.uri||`https://www.inaturalist.org/observations/${observation.id}`,
+        title:observation?.taxon?.name||query,
+        creator,
+        license:license.toUpperCase(),
+        licenseUrl:
+          license==="cc0"
+            ?"https://creativecommons.org/publicdomain/zero/1.0/"
+            :`https://creativecommons.org/licenses/${license.replace("cc-","")}/4.0/`,
+        attribution:creator,
+        source:"iNaturalist research-grade observation",
+        observationId:observation.id||null,
+        mediaMatch:exact?"EXACT":"REPRESENTATIVE_DESCENDANT",
       };
-      memoryCache.set(key, result);
+      memoryCache.set(key,result);
       return result;
     }
   }
 
-  memoryCache.set(key, null);
+  memoryCache.set(key,null);
+  return null;
+}
+
+function acceptedEolLicense(value=""){
+  return acceptedOpenLicense(value);
+}
+
+export async function searchEolImage(scientificName) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+  const key=`eol:${query.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  try{
+    const searchParams=new URLSearchParams({q:query,page:"1",exact:"true"});
+    const found=await fetchJsonWithRetry(
+      `https://eol.org/api/search/1.0.json?${searchParams}`,
+      "EOL search",
+      9000
+    );
+    const candidate=(found?.results??[]).find((item)=>
+      normalizeScientificName(item?.title||"")===normalizeScientificName(query)
+    )||(found?.results??[])[0];
+
+    if(!candidate?.id){
+      memoryCache.set(key,null);
+      return null;
+    }
+
+    const pageParams=new URLSearchParams({
+      details:"true",
+      images_per_page:"12",
+      videos_per_page:"0",
+      sounds_per_page:"0",
+      maps_per_page:"0",
+      texts_per_page:"0",
+      vetted:"1",
+      language:"en",
+    });
+    const page=await fetchJsonWithRetry(
+      `https://eol.org/api/pages/1.0/${candidate.id}.json?${pageParams}`,
+      "EOL page",
+      10000
+    );
+
+    for(const object of page?.dataObjects??[]){
+      const imageUrl=object.eolMediaURL||object.mediaURL||object.thumbnailURL||null;
+      const license=object.license||"";
+      if(!imageUrl||!acceptedEolLicense(license))continue;
+
+      const creator=cleanHtml(
+        object.rightsHolder||
+        object.agents?.map((agent)=>agent?.full_name||agent?.homepage).filter(Boolean).join(", ")||
+        object.source||
+        "EOL content partner"
+      );
+
+      const result={
+        imageUrl,
+        originalUrl:object.source||object.eolMediaURL||imageUrl,
+        title:object.title||candidate.title||query,
+        creator,
+        license:cleanHtml(license),
+        licenseUrl:/^https?:/i.test(license)?license:null,
+        attribution:creator,
+        source:"Encyclopedia of Life",
+        eolPageId:candidate.id,
+        mediaMatch:"EXACT_AGGREGATED",
+      };
+      memoryCache.set(key,result);
+      return result;
+    }
+  }catch{}
+
+  memoryCache.set(key,null);
+  return null;
+}
+
+export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+
+  try{
+    const gbif=await searchGbifImage(query);
+    if(gbif)return {...gbif,resolver:gbif.resolverHint||"gbif-exact-or-accepted",confidence:"HIGH"};
+  }catch{}
+
+  const rankKey=String(rank||"").toLowerCase();
+  const allowDescendant=![
+    "species","subspecies","variety","subvariety","form","subform","strain"
+  ].includes(rankKey);
+
+  try{
+    const inat=await searchINaturalistImage(query,{allowDescendant});
+    if(inat)return {
+      ...inat,
+      resolver:inat.mediaMatch==="EXACT"?"inaturalist-exact":"inaturalist-representative",
+      confidence:inat.mediaMatch==="EXACT"?"HIGH":"MEDIUM",
+    };
+  }catch{}
+
+  try{
+    const eol=await searchEolImage(query);
+    if(eol)return {...eol,resolver:"eol-exact",confidence:"MEDIUM"};
+  }catch{}
+
+  try{
+    const commons=await searchCommonsImage(query,{exact:true});
+    if(commons)return {...commons,resolver:"commons-exact",confidence:"MEDIUM"};
+  }catch{}
+
   return null;
 }
 
