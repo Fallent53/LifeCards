@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v7";
+const CACHE_SCHEMA_VERSION = "v8";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -138,6 +138,25 @@ export function ncbiUrlForTaxId(taxId) {
   return safe ? `https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=${safe}` : null;
 }
 
+function mediaCandidateScore(media, confidence = "LOW", resolver = "") {
+  if(!media?.imageUrl)return -1;
+  let score=0;
+  if(hasCompleteAttribution(media))score+=100;
+  const level=String(confidence||"LOW").toUpperCase();
+  if(level==="HIGH")score+=40;
+  else if(level==="MEDIUM")score+=20;
+  if(String(resolver).startsWith("wikipedia-pageimage"))score+=6;
+  else if(String(resolver).startsWith("wikidata-p18"))score+=5;
+  else if(String(resolver).startsWith("gbif"))score+=4;
+  return score;
+}
+
+function chooseBestMediaCandidate(candidates) {
+  return (candidates||[])
+    .filter((candidate)=>candidate?.media?.imageUrl)
+    .sort((a,b)=>mediaCandidateScore(b.media,b.confidence,b.resolver)-mediaCandidateScore(a.media,a.confidence,a.resolver))[0]||null;
+}
+
 export async function getKnowledge(query, { lang = "en" } = {}) {
   const normalized = String(query || "").trim();
   if (!normalized) return null;
@@ -237,21 +256,39 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
       run:async () => normalizedQuery!==normalizedTaxon ? searchCommonsImage(normalized,{exact:true}) : null,
     },
   ];
+  let bestCandidate=null;
   for (const attempt of mediaAttempts) {
-    if (media) break;
     try {
       const result=await attempt.run();
-      if(result){
-        media={
-          ...result,
-          resolver:attempt.resolver,
-          confidence:attempt.confidence,
-          exactTaxonIdentity,
-        };
-      }
+      if(!result)continue;
+
+      const candidate={
+        media:result,
+        resolver:attempt.resolver,
+        confidence:attempt.confidence,
+      };
+
+      bestCandidate=chooseBestMediaCandidate([bestCandidate,candidate]);
+
+      // A fully attributed, high-confidence candidate cannot be improved for
+      // card readiness, so stop before spending more provider requests.
+      if(
+        bestCandidate &&
+        String(bestCandidate.confidence).toUpperCase()==="HIGH" &&
+        hasCompleteAttribution(bestCandidate.media)
+      ) break;
     } catch {
       // A failed provider must not prevent the next fallback.
     }
+  }
+
+  if(bestCandidate){
+    media={
+      ...bestCandidate.media,
+      resolver:bestCandidate.resolver,
+      confidence:bestCandidate.confidence,
+      exactTaxonIdentity,
+    };
   }
 
   const value = {
@@ -452,9 +489,14 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   const pageImages=[...new Set(
     [...pages.values()].map((page)=>page?.pageimage).filter(Boolean)
   )];
-  const wikipediaFileMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
+  const wikidataImages=[...new Set(
+    Object.values(entities).map((entity)=>claimValue(entity,"P18")).filter(Boolean)
+  )];
+  const candidateFiles=[...new Set([...pageImages,...wikidataImages])];
 
-  const unresolvedAttribution=pageImages.filter((name)=>{
+  const wikipediaFileMetadata=await getWikipediaFilesMetadataBatch(candidateFiles,lang);
+
+  const unresolvedAttribution=candidateFiles.filter((name)=>{
     const media=wikipediaFileMetadata[normalizeMediaFileKey(name)]||null;
     return !hasCompleteAttribution(media);
   });
@@ -480,34 +522,67 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     const trustedIdentity=exactTaxonIdentity||exactWikipediaTitle;
 
     let media=null;
+    const mediaCandidates=[];
+
     if(page?.pageimage){
       const key=normalizeMediaFileKey(page.pageimage);
       const local=wikipediaFileMetadata[key]||null;
       const commons=commonsFileMetadata[key]||null;
-
-      media=
+      const pageMedia=
         (hasCompleteAttribution(local)?local:null) ||
         (hasCompleteAttribution(commons)?commons:null) ||
         local ||
         commons ||
         wikipediaThumbnailFallback(page,lang);
 
-      if(media){
-        media={
-          ...media,
+      if(pageMedia){
+        mediaCandidates.push({
+          media:pageMedia,
           resolver:
             hasCompleteAttribution(commons)&&!hasCompleteAttribution(local)
               ?"wikipedia-pageimage+commons-batch"
               :"wikipedia-pageimage-batch",
           confidence:trustedIdentity?"HIGH":"MEDIUM",
-          exactTaxonIdentity,
-          exactWikipediaTitle,
-          wikipediaMatch:page?._lifecardsMatch||null,
-        };
+        });
       }
     }
 
-    if(page&&media){
+    const p18=claimValue(entity,"P18");
+    if(p18){
+      const key=normalizeMediaFileKey(p18);
+      const local=wikipediaFileMetadata[key]||null;
+      const commons=commonsFileMetadata[key]||null;
+      const p18Media=
+        (hasCompleteAttribution(commons)?commons:null) ||
+        (hasCompleteAttribution(local)?local:null) ||
+        commons ||
+        local;
+
+      if(p18Media){
+        mediaCandidates.push({
+          media:p18Media,
+          resolver:
+            hasCompleteAttribution(commons)
+              ?"wikidata-p18+commons-batch"
+              :"wikidata-p18-batch",
+          confidence:trustedIdentity?"HIGH":"MEDIUM",
+        });
+      }
+    }
+
+    const best=chooseBestMediaCandidate(mediaCandidates);
+    if(best){
+      media={
+        ...best.media,
+        resolver:best.resolver,
+        confidence:best.confidence,
+        exactTaxonIdentity,
+        exactWikipediaTitle,
+        wikipediaMatch:page?._lifecardsMatch||null,
+      };
+    }
+
+    if(page&&media&&hasCompleteAttribution(media)){
       const value={
         query:entry.query,
         wikipedia:{
