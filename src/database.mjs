@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { byId, publicCatalog } from "./catalog.mjs";
+import { byId, catalog, publicCatalog } from "./catalog.mjs";
 import { DEFAULT_CONFIG, generatePackBlueprint, packsAccrued, cryptoRng } from "./game-engine.mjs";
 
 const dbPath = resolve(process.env.LIFECARDS_DB_PATH ?? "./data/lifecards.sqlite");
@@ -68,6 +68,27 @@ export function migrate() {
       PRIMARY KEY (provider, cache_key)
     );
     CREATE INDEX IF NOT EXISTS external_cache_expiry_idx ON external_cache(expires_at);
+    CREATE TABLE IF NOT EXISTS knowledge_stats (
+      user_id TEXT PRIMARY KEY,
+      points INTEGER NOT NULL DEFAULT 0,
+      correct_answers INTEGER NOT NULL DEFAULT 0,
+      total_answers INTEGER NOT NULL DEFAULT 0,
+      streak INTEGER NOT NULL DEFAULT 0,
+      best_streak INTEGER NOT NULL DEFAULT 0,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE TABLE IF NOT EXISTS quiz_questions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      options_json TEXT NOT NULL,
+      correct_option TEXT NOT NULL,
+      explanation TEXT,
+      created_at INTEGER NOT NULL,
+      answered_at INTEGER,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+    CREATE INDEX IF NOT EXISTS quiz_questions_user_idx ON quiz_questions(user_id, created_at DESC);
   `);
 }
 
@@ -262,6 +283,7 @@ export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
   return {
     user: { id: user.id, displayName: user.display_name, coins: Number(user.coins), packs: Number(user.pack_balance), maxPacks: config.maxStoredPacks, nextPackInMs },
     inventory,
+    profile: profileStats(userId, inventory),
     market: listMarket(),
     catalog: publicCatalog(),
     config: { packIntervalMs: config.packIntervalMs, cardsPerPack: config.cardsPerPack, maxStoredPacks: config.maxStoredPacks, holoRate: config.holoRate, lucaRarityLabel: "UNKNOWN" },
@@ -289,6 +311,176 @@ export function seedDemoMarket() {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+function ensureKnowledgeStats(userId) {
+  ensureUser(userId);
+  db.prepare(`
+    INSERT INTO knowledge_stats (user_id, points, correct_answers, total_answers, streak, best_streak)
+    VALUES (?, 0, 0, 0, 0, 0)
+    ON CONFLICT(user_id) DO NOTHING
+  `).run(userId);
+  return db.prepare("SELECT * FROM knowledge_stats WHERE user_id = ?").get(userId);
+}
+
+function shuffled(values, rng = cryptoRng()) {
+  const result = [...values];
+  for (let index = result.length - 1; index > 0; index -= 1) {
+    const other = rng.int(index + 1);
+    [result[index], result[other]] = [result[other], result[index]];
+  }
+  return result;
+}
+
+function uniqueOptions(correct, candidates, rng) {
+  const rest = [...new Set(candidates.filter((value) => value && value !== correct))];
+  const picked = shuffled(rest, rng).slice(0, 3);
+  return shuffled([correct, ...picked], rng);
+}
+
+export function getKnowledgeStats(userId = "explorer") {
+  migrate();
+  const row = ensureKnowledgeStats(userId);
+  return {
+    points: Number(row.points),
+    correctAnswers: Number(row.correct_answers),
+    totalAnswers: Number(row.total_answers),
+    streak: Number(row.streak),
+    bestStreak: Number(row.best_streak),
+    accuracy: Number(row.total_answers) > 0
+      ? Number(row.correct_answers) / Number(row.total_answers)
+      : 0,
+  };
+}
+
+export function createKnowledgeQuestion(userId = "explorer", rng = cryptoRng()) {
+  migrate();
+  ensureKnowledgeStats(userId);
+
+  const parentCandidates = catalog.filter((definition) => definition.parentId && byId.has(definition.parentId));
+  const rankCandidates = catalog.filter((definition) => definition.kind === "taxon" && definition.rank);
+
+  const useParent = parentCandidates.length > 0 && (rankCandidates.length === 0 || rng.int(2) === 0);
+  let prompt;
+  let correct;
+  let options;
+  let explanation;
+
+  if (useParent) {
+    const definition = parentCandidates[rng.int(parentCandidates.length)];
+    const parent = byId.get(definition.parentId);
+    prompt = `Which group is the direct parent of ${definition.commonName} in the LifeCards tree?`;
+    correct = parent.commonName;
+    options = uniqueOptions(
+      correct,
+      catalog.filter((entry) => entry.kind === "taxon").map((entry) => entry.commonName),
+      rng
+    );
+    explanation = `${definition.commonName} is placed under ${parent.commonName} in the current LifeCards tree snapshot.`;
+  } else {
+    const definition = rankCandidates[rng.int(rankCandidates.length)];
+    prompt = `What taxonomic rank is ${definition.commonName} represented as in LifeCards?`;
+    correct = definition.rank;
+    options = uniqueOptions(
+      correct,
+      rankCandidates.map((entry) => entry.rank),
+      rng
+    );
+    explanation = `${definition.commonName} is represented as the rank “${definition.rank}” in the current taxonomy snapshot.`;
+  }
+
+  const id = uuid();
+  db.prepare(`
+    INSERT INTO quiz_questions
+      (id, user_id, prompt, options_json, correct_option, explanation, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(id, userId, prompt, JSON.stringify(options), correct, explanation, nowMs());
+
+  return { id, prompt, options };
+}
+
+export function answerKnowledgeQuestion(userId = "explorer", questionId, selectedOption) {
+  migrate();
+  ensureKnowledgeStats(userId);
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    const question = db.prepare(
+      "SELECT * FROM quiz_questions WHERE id = ? AND user_id = ?"
+    ).get(questionId, userId);
+    if (!question) throw new Error("Question not found");
+    if (question.answered_at) throw new Error("Question already answered");
+    if (nowMs() - Number(question.created_at) > 30 * 60 * 1000) {
+      throw new Error("Question expired");
+    }
+
+    const correct = String(selectedOption) === String(question.correct_option);
+    const stats = ensureKnowledgeStats(userId);
+    const nextStreak = correct ? Number(stats.streak) + 1 : 0;
+    const nextBest = Math.max(Number(stats.best_streak), nextStreak);
+    const pointsEarned = correct ? 25 + Math.min(25, nextStreak * 2) : 0;
+    const coinReward = correct ? 10 : 0;
+
+    db.prepare(`
+      UPDATE knowledge_stats
+      SET points = points + ?,
+          correct_answers = correct_answers + ?,
+          total_answers = total_answers + 1,
+          streak = ?,
+          best_streak = ?
+      WHERE user_id = ?
+    `).run(pointsEarned, correct ? 1 : 0, nextStreak, nextBest, userId);
+
+    if (coinReward > 0) {
+      db.prepare("UPDATE users SET coins = coins + ? WHERE id = ?").run(coinReward, userId);
+    }
+
+    db.prepare("UPDATE quiz_questions SET answered_at = ? WHERE id = ?")
+      .run(nowMs(), questionId);
+    db.exec("COMMIT");
+
+    return {
+      correct,
+      correctOption: question.correct_option,
+      explanation: question.explanation,
+      pointsEarned,
+      coinReward,
+      stats: getKnowledgeStats(userId),
+    };
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function profileStats(userId, inventory) {
+  const uniqueSpecies = new Set(inventory.filter((card) => card.kind === "species").map((card) => card.definitionId)).size;
+  const uniqueTaxa = new Set(inventory.filter((card) => card.kind === "taxon").map((card) => card.definitionId)).size;
+  const holo = inventory.filter((card) => card.finish === "HOLO").length;
+  const wild = inventory.filter((card) => card.edition === "WILD CENSUS I").length;
+  const fossil = inventory.filter((card) => card.edition === "FOSSIL RECORD I").length;
+  const origin = inventory.some((card) => card.definitionId === "luca");
+
+  const achievements = [
+    { id: "first-discovery", name: "First Discovery", description: "Own your first LifeCard.", unlocked: inventory.length >= 1 },
+    { id: "field-naturalist", name: "Field Naturalist", description: "Discover 5 distinct species.", unlocked: uniqueSpecies >= 5 },
+    { id: "branch-collector", name: "Branch Collector", description: "Own 3 distinct taxon cards.", unlocked: uniqueTaxa >= 3 },
+    { id: "holographic", name: "Iridescent", description: "Own a Holo card.", unlocked: holo >= 1 },
+    { id: "wild-archive", name: "Wild Archive", description: "Own 5 Wild Census cards.", unlocked: wild >= 5 },
+    { id: "deep-time", name: "Deep Time", description: "Own a Fossil Record card.", unlocked: fossil >= 1 },
+    { id: "the-origin", name: "The Origin", description: "Become the keeper of LUCA #1/1.", unlocked: origin },
+  ];
+
+  return {
+    totalCards: inventory.length,
+    uniqueSpecies,
+    uniqueTaxa,
+    holo,
+    wild,
+    fossil,
+    origin,
+    achievements,
+    knowledge: getKnowledgeStats(userId),
+  };
 }
 
 export function getExternalCache(provider, cacheKey) {
@@ -336,7 +528,7 @@ export function purgeExpiredExternalCache() {
 }
 
 export function resetForTests() {
-  db.exec("DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
+  db.exec("DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
 }
 
 migrate();
