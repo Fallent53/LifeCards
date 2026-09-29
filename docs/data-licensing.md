@@ -43,3 +43,10 @@ The Extended Release maximizes coverage; a stricter production track may choose 
 - **Wikimedia Commons:** image bytes plus machine-readable author/license/attribution metadata.
 - **NCBI Taxonomy:** external molecular/taxonomic identifier used for cross-linking.
 - **Lifemap NCBI:** outbound visualization/deep-link target; no Lifemap code or assets are embedded.
+
+
+## GBIF media fallback
+
+When Wikipedia/Wikimedia Commons cannot provide a reusable image, LifeCards may query the GBIF occurrence search API lazily for the same scientific name. The resolver accepts only media carrying an explicit reusable license such as CC0, CC BY or CC BY-SA; media with missing or non-commercial/restrictive terms is ignored.
+
+The selected media metadata (creator, rights holder when available, license, source and occurrence key) is stored in the persistent LifeCards knowledge cache. GBIF is a fallback only: it is not bulk-crawled and it is never queried for every taxon in the Catalogue of Life snapshot.
