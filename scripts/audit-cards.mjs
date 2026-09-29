@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v13-all-real-media-fallbacks";
+const AUDIT_RESOLVER_VERSION="v14-real-genus-representatives";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
