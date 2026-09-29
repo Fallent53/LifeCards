@@ -334,6 +334,102 @@ export async function searchGbifImage(scientificName) {
   return null;
 }
 
+export async function searchIDigBioImage(scientificName,{rank=""}={}) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+
+  const rankKey=String(rank||"").toLowerCase();
+  const field=["genus","family","order","class","phylum"].includes(rankKey)
+    ?rankKey
+    :"scientificname";
+  const key=`idigbio:${field}:${query.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const rq=JSON.stringify({[field]:query});
+  const params=new URLSearchParams({rq,limit:"20"});
+
+  let json=null;
+  try{
+    json=await fetchJsonWithRetry(
+      `https://search.idigbio.org/v2/search/media/?${params}`,
+      "iDigBio",
+      12000
+    );
+  }catch{
+    memoryCache.set(key,null);
+    return null;
+  }
+
+  for(const item of json?.items??[]){
+    const data=item?.data||{};
+    const idx=item?.indexTerms||{};
+    const format=String(data["dcterms:format"]||idx.format||"").toLowerCase();
+    if(format&&!format.startsWith("image/"))continue;
+    if(format.includes("svg"))continue;
+
+    const imageUrl=
+      data["ac:goodQualityAccessURI"]||
+      data["ac:accessURI"]||
+      idx.accessuri||
+      null;
+    if(!imageUrl)continue;
+
+    const rights=[
+      data["xmpRights:UsageTerms"],
+      data["dc:rights"],
+      data["dcterms:rights"],
+      idx.rights,
+      idx.webstatement,
+      idx.licenselogourl,
+    ].filter(Boolean).join(" ");
+
+    if(!acceptedOpenLicense(rights))continue;
+
+    const creator=cleanHtml(
+      data["dc:creator"]||
+      data["xmpRights:Owner"]||
+      data["dcterms:rightsHolder"]||
+      idx.rightsowner||
+      "Museum collection"
+    );
+
+    const originalUrl=
+      data["ac:providerManagedID"]||
+      data["ac:providerManagedIDURL"]||
+      idx.webstatement||
+      imageUrl;
+
+    const result={
+      imageUrl,
+      originalUrl,
+      title:query,
+      creator,
+      license:cleanHtml(
+        data["xmpRights:UsageTerms"]||
+        data["dc:rights"]||
+        idx.rights||
+        "Open specimen media"
+      ),
+      licenseUrl:
+        /^https?:/i.test(String(idx.webstatement||""))
+          ?idx.webstatement
+          :(/^https?:/i.test(String(data["xmpRights:UsageTerms"]||""))
+            ?data["xmpRights:UsageTerms"]
+            :null),
+      attribution:creator,
+      source:"iDigBio museum specimen media",
+      specimenMediaId:item.uuid||null,
+      mediaMatch:field==="scientificname"?"EXACT_SPECIMEN":"REPRESENTATIVE_SPECIMEN",
+    };
+
+    memoryCache.set(key,result);
+    return result;
+  }
+
+  memoryCache.set(key,null);
+  return null;
+}
+
 export async function searchINaturalistImage(scientificName,{allowDescendant=false}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
@@ -498,6 +594,17 @@ export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
   ].includes(rankKey);
 
   try{
+    const specimen=await searchIDigBioImage(query,{rank});
+    if(specimen)return {
+      ...specimen,
+      resolver:specimen.mediaMatch==="EXACT_SPECIMEN"
+        ?"idigbio-exact-specimen"
+        :"idigbio-representative-specimen",
+      confidence:specimen.mediaMatch==="EXACT_SPECIMEN"?"HIGH":"MEDIUM",
+    };
+  }catch{}
+
+  try{
     const inat=await searchINaturalistImage(query,{allowDescendant});
     if(inat)return {
       ...inat,
@@ -506,10 +613,9 @@ export async function searchSupplementalRealMedia(scientificName,{rank=""}={}) {
     };
   }catch{}
 
-  try{
-    const eol=await searchEolImage(query);
-    if(eol)return {...eol,resolver:"eol-exact",confidence:"MEDIUM"};
-  }catch{}
+  // EOL is intentionally not auto-promoted here yet: its aggregate media can
+  // include illustrations as well as photographs. Keep it available for a
+  // later typed-media pass rather than violating strict real-photo mode.
 
   try{
     const commons=await searchCommonsImage(query,{exact:true});
