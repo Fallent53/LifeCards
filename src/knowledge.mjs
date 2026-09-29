@@ -1,7 +1,49 @@
+import { DatabaseSync } from "node:sqlite";
+import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, searchCommonsImage } from "./media.mjs";
 
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 const cache = new Map();
+const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
+mkdirSync(dirname(knowledgeDbPath), { recursive: true });
+const knowledgeDb = new DatabaseSync(knowledgeDbPath);
+knowledgeDb.exec(`
+  PRAGMA journal_mode=WAL;
+  CREATE TABLE IF NOT EXISTS knowledge_cache (
+    query TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    fetched_at INTEGER NOT NULL,
+    PRIMARY KEY(query, lang)
+  );
+`);
+
+function readPersistentCache(query, lang) {
+  try {
+    const row = knowledgeDb.prepare(
+      "SELECT payload_json, fetched_at FROM knowledge_cache WHERE query = ? AND lang = ?"
+    ).get(query, lang);
+    if (!row || Date.now() - Number(row.fetched_at) >= CACHE_TTL_MS) return null;
+    return JSON.parse(row.payload_json);
+  } catch {
+    return null;
+  }
+}
+
+function writePersistentCache(query, lang, value) {
+  try {
+    knowledgeDb.prepare(`
+      INSERT INTO knowledge_cache(query, lang, payload_json, fetched_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(query, lang) DO UPDATE SET
+        payload_json = excluded.payload_json,
+        fetched_at = excluded.fetched_at
+    `).run(query, lang, JSON.stringify(value), Date.now());
+  } catch {
+    // Cache failures must never break gameplay.
+  }
+}
 
 async function fetchJson(url, timeoutMs = 5000) {
   const response = await fetch(url, {
@@ -95,6 +137,12 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.storedAt < CACHE_TTL_MS) return cached.value;
 
+  const persisted = readPersistentCache(normalized.toLowerCase(), lang);
+  if (persisted) {
+    cache.set(cacheKey, { storedAt: Date.now(), value: persisted });
+    return persisted;
+  }
+
   let page = null;
   try {
     page = await wikipediaPage(normalized, lang);
@@ -172,5 +220,6 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   };
 
   cache.set(cacheKey, { storedAt: Date.now(), value });
+  writePersistentCache(normalized.toLowerCase(), lang, value);
   return value;
 }
