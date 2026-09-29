@@ -2,6 +2,15 @@ import crypto from "node:crypto";
 const ACCEPTED_LICENSE_MARKERS = ["cc by", "cc-by", "cc0", "public domain", "pd-"];
 const memoryCache = new Map();
 
+export function normalizeMediaFileKey(value = "") {
+  return String(value || "")
+    .replace(/^File:/i, "")
+    .replaceAll("_", " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
 function cleanHtml(value = "") {
   return String(value).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -273,7 +282,7 @@ export async function getWikipediaFilesMetadataBatch(fileNames, lang = "en") {
     for(const page of Object.values(json?.query?.pages??{})){
       const name=String(page?.title||"").replace(/^File:/i,"").trim();
       if(!name)continue;
-      output[name.toLowerCase()]=mediaFromPage(page,`Wikipedia (${safeLang})`);
+      output[normalizeMediaFileKey(name)]=mediaFromPage(page,`Wikipedia (${safeLang})`);
     }
   }
 
@@ -311,7 +320,7 @@ export async function getCommonsFilesMetadataBatch(fileNames) {
       const name=String(page?.title||"").replace(/^File:/i,"").trim();
       if(!name)continue;
       const value=mediaFromPage(page,"Wikimedia Commons");
-      if(value)output[name.toLowerCase()]=value;
+      if(value)output[normalizeMediaFileKey(name)]=value;
     }
   }
 
@@ -319,10 +328,17 @@ export async function getCommonsFilesMetadataBatch(fileNames) {
 }
 
 export function hasCompleteAttribution(media) {
+  const creator=String(media?.creator||"").trim();
+  const license=String(media?.license||"").trim();
+  const creatorPlaceholder=/^(unknown creator|unknown|—)$/i.test(creator);
+  const licensePlaceholder=/^(see source|unknown|—)$/i.test(license);
+
   return Boolean(
     media?.imageUrl &&
     media?.originalUrl &&
-    media?.creator &&
-    media?.license
+    creator &&
+    license &&
+    !creatorPlaceholder &&
+    !licensePlaceholder
   );
 }
