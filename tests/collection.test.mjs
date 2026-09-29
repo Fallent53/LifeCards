@@ -194,3 +194,37 @@ test("card provenance follows recognized market transfers", () => {
   assert.equal(provenance.events[1].buyerId, "keeper-two");
   assert.equal(provenance.events[1].price, 4321);
 });
+
+
+test("pack audit chain is linked and tamper evident", () => {
+  database.resetForTests();
+  database.ensureUser("audit-user", "Audit User");
+  database.db.prepare("UPDATE users SET pack_balance = 2 WHERE id = ?").run("audit-user");
+
+  const first = database.claimPack("audit-user", config(), deterministicRng());
+  const second = database.claimPack("audit-user", config(), deterministicRng());
+
+  assert.ok(first.audit?.hash);
+  assert.ok(second.audit?.hash);
+  assert.equal(second.audit.previousHash, first.audit.hash);
+  assert.ok(second.audit.sequence > first.audit.sequence);
+
+  const linkedCard = first.cards[0];
+  assert.equal(linkedCard.packAuditId, first.audit.id);
+
+  const provenance = database.getCardProvenance(linkedCard.id);
+  assert.equal(provenance.issueAudit.id, first.audit.id);
+  assert.equal(provenance.issueAudit.hash, first.audit.hash);
+
+  const valid = database.verifyPackAuditChain();
+  assert.equal(valid.valid, true);
+  assert.equal(valid.headHash, second.audit.hash);
+
+  database.db.prepare(
+    "UPDATE pack_audits SET payload_json = ? WHERE id = ?"
+  ).run('{"tampered":true}', first.audit.id);
+
+  const broken = database.verifyPackAuditChain();
+  assert.equal(broken.valid, false);
+  assert.equal(broken.brokenAt, first.audit.sequence);
+});
