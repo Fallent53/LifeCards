@@ -128,6 +128,23 @@ export function migrate() {
       FOREIGN KEY(user_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS pack_audit_opened_idx ON pack_audit(opened_at DESC);
+    CREATE TABLE IF NOT EXISTS accounts (
+      user_id TEXT PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      password_hash TEXT NOT NULL,
+      password_salt TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      token_hash TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS sessions_user_idx ON sessions(user_id);
+    CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
   `);
   migrateLegacyListingsUniqueConstraint();
 }
@@ -170,6 +187,132 @@ function migrateLegacyListingsUniqueConstraint() {
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }
+}
+
+function hashPassword(password, saltHex) {
+  return crypto.scryptSync(String(password), Buffer.from(saltHex, "hex"), 64).toString("hex");
+}
+
+function validUsername(username) {
+  return /^[a-zA-Z0-9_.-]{3,24}$/.test(String(username || ""));
+}
+
+export function registerAccount({ username, password, displayName }) {
+  migrate();
+  const normalized = String(username || "").trim();
+  const pass = String(password || "");
+  const name = String(displayName || normalized).trim().slice(0, 40);
+
+  if (!validUsername(normalized)) {
+    throw new Error("Username must be 3–24 characters using letters, numbers, _, . or -");
+  }
+  if (pass.length < 10 || pass.length > 200) {
+    throw new Error("Password must be between 10 and 200 characters");
+  }
+  if (!name) throw new Error("Display name is required");
+
+  const existing = db.prepare("SELECT user_id FROM accounts WHERE username = ? COLLATE NOCASE").get(normalized);
+  if (existing) throw new Error("Username is already taken");
+
+  const userId = uuid();
+  const salt = crypto.randomBytes(16).toString("hex");
+  const passwordHash = hashPassword(pass, salt);
+  const now = nowMs();
+
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    db.prepare(`
+      INSERT INTO users (id, display_name, coins, pack_balance, pack_anchor_at, created_at)
+      VALUES (?, ?, 10000, 1, ?, ?)
+    `).run(userId, name, now, now);
+    db.prepare(`
+      INSERT INTO accounts (user_id, username, password_hash, password_salt, created_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, normalized, passwordHash, salt, now);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  return { id: userId, username: normalized, displayName: name };
+}
+
+export function authenticateAccount(username, password) {
+  migrate();
+  const row = db.prepare(`
+    SELECT a.user_id, a.username, a.password_hash, a.password_salt, u.display_name
+    FROM accounts a
+    JOIN users u ON u.id = a.user_id
+    WHERE a.username = ? COLLATE NOCASE
+  `).get(String(username || "").trim());
+
+  if (!row) return null;
+  const candidate = hashPassword(String(password || ""), row.password_salt);
+  const left = Buffer.from(candidate, "hex");
+  const right = Buffer.from(row.password_hash, "hex");
+  if (left.length !== right.length || !crypto.timingSafeEqual(left, right)) return null;
+
+  return {
+    id: row.user_id,
+    username: row.username,
+    displayName: row.display_name,
+  };
+}
+
+function sessionTokenHash(rawToken) {
+  return crypto.createHash("sha256").update(String(rawToken)).digest("hex");
+}
+
+export function createSession(userId, ttlMs = 30 * 24 * 60 * 60 * 1000) {
+  migrate();
+  ensureUser(userId);
+  const rawToken = crypto.randomBytes(32).toString("base64url");
+  const tokenHash = sessionTokenHash(rawToken);
+  const createdAt = nowMs();
+  const expiresAt = createdAt + ttlMs;
+  db.prepare(`
+    INSERT INTO sessions (token_hash, user_id, created_at, expires_at)
+    VALUES (?, ?, ?, ?)
+  `).run(tokenHash, userId, createdAt, expiresAt);
+  return { rawToken, expiresAt };
+}
+
+export function resolveSession(rawToken) {
+  migrate();
+  if (!rawToken) return null;
+  const tokenHash = sessionTokenHash(rawToken);
+  const row = db.prepare(`
+    SELECT s.user_id, s.expires_at, a.username, u.display_name
+    FROM sessions s
+    JOIN users u ON u.id = s.user_id
+    LEFT JOIN accounts a ON a.user_id = s.user_id
+    WHERE s.token_hash = ?
+  `).get(tokenHash);
+  if (!row) return null;
+
+  if (Number(row.expires_at) <= nowMs()) {
+    db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(tokenHash);
+    return null;
+  }
+
+  return {
+    id: row.user_id,
+    username: row.username || null,
+    displayName: row.display_name,
+    expiresAt: Number(row.expires_at),
+  };
+}
+
+export function revokeSession(rawToken) {
+  migrate();
+  if (!rawToken) return;
+  db.prepare("DELETE FROM sessions WHERE token_hash = ?").run(sessionTokenHash(rawToken));
+}
+
+export function purgeExpiredSessions() {
+  migrate();
+  return db.prepare("DELETE FROM sessions WHERE expires_at <= ?").run(nowMs());
 }
 
 export function ensureUser(id = "explorer", displayName = "Explorer") {
@@ -839,7 +982,7 @@ export function purgeExpiredExternalCache() {
 }
 
 export function resetForTests() {
-  db.exec("DELETE FROM pack_audit; DELETE FROM auction_bids; DELETE FROM auctions; DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
+  db.exec("DELETE FROM sessions; DELETE FROM accounts; DELETE FROM pack_audit; DELETE FROM auction_bids; DELETE FROM auctions; DELETE FROM quiz_questions; DELETE FROM knowledge_stats; DELETE FROM external_cache; DELETE FROM listings; DELETE FROM cards; DELETE FROM supplies; DELETE FROM users;");
 }
 
 migrate();
