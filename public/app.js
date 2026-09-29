@@ -66,7 +66,12 @@ let codexSearchTimer=null;
 let collectionSearchTimer=null;
 let mediaBatchTimer=null;
 let mediaBatchInFlight=0;
+let deepMediaTimer=null;
+let deepMediaInFlight=0;
 const mediaBatchQueue=new Set();
+const deepMediaQueue=new Set();
+const mediaFastAttempted=new Set();
+const mediaDeepAttempted=new Set();
 
 const RARITY={
   COMMON:{label:"Common",short:"C"},
@@ -231,6 +236,80 @@ function updateMediaNodes(definitionId){
   });
 }
 
+function deepMediaEntry(id){
+  const definition=ui.definitionIndex.get(String(id));
+  if(!definition)return null;
+  return {
+    id:String(id),
+    query:knowledgeQuery(definition),
+    scientificName:definition.scientificName||definition.canonicalName||knowledgeQuery(definition),
+    rank:definition.rank||definition.kind||"",
+    extinct:definition.temporalStatus==="extinct",
+  };
+}
+
+function queueDeepMedia(id){
+  const key=String(id||"");
+  if(!key||ui.media.has(key)||mediaDeepAttempted.has(key))return;
+  deepMediaQueue.add(key);
+  if(!deepMediaTimer)deepMediaTimer=setTimeout(flushDeepMediaBatch,120);
+}
+
+async function flushDeepMediaBatch(){
+  clearTimeout(deepMediaTimer);
+  deepMediaTimer=null;
+
+  if(deepMediaInFlight>=1){
+    deepMediaTimer=setTimeout(flushDeepMediaBatch,160);
+    return;
+  }
+
+  const ids=[...deepMediaQueue].slice(0,2);
+  if(!ids.length)return;
+
+  ids.forEach(id=>{
+    deepMediaQueue.delete(id);
+    mediaDeepAttempted.add(id);
+  });
+  deepMediaInFlight+=1;
+
+  const entries=ids.map(deepMediaEntry).filter(Boolean);
+  if(!entries.length){
+    deepMediaInFlight=Math.max(0,deepMediaInFlight-1);
+    return;
+  }
+
+  try{
+    const result=await api("/api/knowledge/deep-batch",{
+      method:"POST",
+      body:JSON.stringify({lang:"en",entries}),
+      timeoutMs:35000
+    });
+    const values=result.knowledge||{};
+
+    for(const entry of entries){
+      const value=values[entry.id]||null;
+      if(value?.media?.imageUrl){
+        ui.knowledge.set(entry.id,value);
+        ui.media.set(entry.id,value.media);
+      }else{
+        ui.media.set(entry.id,false);
+      }
+      updateMediaNodes(entry.id);
+    }
+  }catch{
+    for(const entry of entries){
+      ui.media.set(entry.id,false);
+      updateMediaNodes(entry.id);
+    }
+  }finally{
+    deepMediaInFlight=Math.max(0,deepMediaInFlight-1);
+    if(deepMediaQueue.size&&!deepMediaTimer){
+      deepMediaTimer=setTimeout(flushDeepMediaBatch,160);
+    }
+  }
+}
+
 async function flushMediaBatch(){
   clearTimeout(mediaBatchTimer);
   mediaBatchTimer=null;
@@ -242,7 +321,10 @@ async function flushMediaBatch(){
 
   const ids=[...mediaBatchQueue].slice(0,6);
   if(!ids.length)return;
-  ids.forEach(id=>mediaBatchQueue.delete(id));
+  ids.forEach(id=>{
+    mediaBatchQueue.delete(id);
+    mediaFastAttempted.add(id);
+  });
   mediaBatchInFlight+=1;
 
   if(mediaBatchQueue.size){
@@ -256,6 +338,7 @@ async function flushMediaBatch(){
       query:knowledgeQuery(definition),
       scientificName:definition.scientificName||definition.canonicalName||knowledgeQuery(definition),
       rank:definition.rank||definition.kind||"",
+      extinct:definition.temporalStatus==="extinct",
     }:null;
   }).filter(Boolean);
 
@@ -273,13 +356,16 @@ async function flushMediaBatch(){
 
     for(const entry of entries){
       const knowledge=values[entry.id]||null;
-      ui.media.set(entry.id,knowledge?.media||false);
-      updateMediaNodes(entry.id);
+      if(knowledge?.media?.imageUrl){
+        ui.media.set(entry.id,knowledge.media);
+        updateMediaNodes(entry.id);
+      }else{
+        queueDeepMedia(entry.id);
+      }
     }
   }catch{
     for(const entry of entries){
-      ui.media.set(entry.id,false);
-      updateMediaNodes(entry.id);
+      queueDeepMedia(entry.id);
     }
   }finally{
     entries.forEach(entry=>ui.mediaLoading.delete(entry.id));
@@ -294,7 +380,7 @@ function queueMediaLoad(definition){
   if(!definition)return;
   const id=String(definition.id);
   ui.definitionIndex.set(id,definition);
-  if(ui.media.has(id)||ui.mediaLoading.has(id))return;
+  if(ui.media.has(id)||ui.mediaLoading.has(id)||mediaFastAttempted.has(id))return;
   mediaBatchQueue.add(id);
   if(!mediaBatchTimer)mediaBatchTimer=setTimeout(flushMediaBatch,35);
 }
