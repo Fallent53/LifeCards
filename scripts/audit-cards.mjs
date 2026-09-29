@@ -397,11 +397,11 @@ function classify(row,knowledge){
 
   if(
     !Boolean(row.extinct) &&
-    /museum specimen|preserved specimen|fossil specimen/i.test(
-      [media.source,media.title,media.resolver].filter(Boolean).join(" ")
+    /museum specimen|preserved specimen|fossil specimen|\bfossil\b|\bskull\b|\bbones?\b|\bherbarium\b|\bmounted\b|\bdrawer\b/i.test(
+      [media.source,media.title,media.originalUrl,media.resolver].filter(Boolean).join(" ")
     )
   ){
-    return {status:"REVIEW",reason:"specimen-only media rejected for extant gameplay"};
+    return {status:"REVIEW",reason:"non-natural specimen/fossil media rejected for extant gameplay"};
   }
 
   const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
