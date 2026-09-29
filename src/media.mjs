@@ -19,7 +19,7 @@ function acceptedLicense(metadata = {}) {
   return ACCEPTED_LICENSE_MARKERS.some((marker) => raw.includes(marker));
 }
 
-function mediaFromPage(page) {
+function mediaFromPage(page, sourceLabel = "Wikimedia Commons") {
   const info = page?.imageinfo?.[0];
   const meta = info?.extmetadata ?? {};
   if (!info?.thumburl || !acceptedLicense(meta)) return null;
@@ -31,7 +31,7 @@ function mediaFromPage(page) {
     license: cleanHtml(meta.LicenseShortName?.value || meta.UsageTerms?.value || "See source"),
     licenseUrl: meta.LicenseUrl?.value || info.descriptionurl || null,
     attribution: cleanHtml(meta.Attribution?.value || meta.Credit?.value || meta.Artist?.value || "Wikimedia Commons"),
-    source: "Wikimedia Commons",
+    source: sourceLabel,
   };
 }
 
@@ -42,6 +42,40 @@ async function commonsQuery(params) {
   });
   if (!response.ok) throw new Error(`Wikimedia Commons returned ${response.status}`);
   return response.json();
+}
+
+async function wikipediaFileQuery(lang, params) {
+  const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
+  const response=await fetch(`https://${safeLang}.wikipedia.org/w/api.php?${params}`,{
+    signal:AbortSignal.timeout(3500),
+    headers:{"User-Agent":"LifeCards/0.1 (licensed Wikipedia media resolver)"},
+  });
+  if(!response.ok)throw new Error(`Wikipedia returned ${response.status}`);
+  return response.json();
+}
+
+export async function getWikipediaFileMetadata(fileName, lang = "en") {
+  const normalized=String(fileName||"").replace(/^File:/i,"").trim();
+  if(!normalized)return null;
+  const key=`wiki-file:${lang}:${normalized.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const params=new URLSearchParams({
+    action:"query",
+    format:"json",
+    origin:"*",
+    titles:`File:${normalized}`,
+    prop:"imageinfo",
+    iiprop:"url|extmetadata",
+    iiextmetadatafilter:"Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
+    iiurlwidth:"1200",
+  });
+
+  const json=await wikipediaFileQuery(lang,params);
+  const page=Object.values(json?.query?.pages??{})[0]??null;
+  const result=mediaFromPage(page,`Wikipedia (${lang})`);
+  memoryCache.set(key,result);
+  return result;
 }
 
 export async function getCommonsFileMetadata(fileName) {
