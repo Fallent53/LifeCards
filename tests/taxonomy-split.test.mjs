@@ -161,6 +161,11 @@ test("map lookups use full-life database while gameplay resolution uses Eukaryot
   assert.equal(taxonomy.getGameplayTaxon("game-fungi")?.scientificName,"Fungi");
 });
 
+test("representative media queries prefer descendant species for broad clades",()=>{
+  const queries=taxonomy.getRepresentativeMediaQueries("game-animalia","Animalia",4);
+  assert.deepEqual(new Set(queries),new Set(["Testus animalis","Wrongus imagus"]));
+});
+
 test("drop selection is independent from media audit readiness",()=>{
   const first=taxonomy.pickDropTaxon("COMMON",{int:()=>0});
   assert.equal(first?.id,"game-species");
