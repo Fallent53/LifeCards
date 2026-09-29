@@ -1,0 +1,238 @@
+import { createWriteStream, existsSync } from "node:fs";
+import { mkdir, rm, stat } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { resolve, dirname } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import unzipper from "unzipper";
+import { parse } from "csv-parse";
+
+const args = new Map();
+for (let i = 2; i < process.argv.length; i += 1) {
+  const arg = process.argv[i];
+  if (arg.startsWith("--")) {
+    const [key, inline] = arg.slice(2).split("=", 2);
+    if (inline !== undefined) args.set(key, inline);
+    else if (process.argv[i + 1] && !process.argv[i + 1].startsWith("--")) args.set(key, process.argv[++i]);
+    else args.set(key, "true");
+  }
+}
+
+const datasetKey = String(args.get("dataset") || process.env.COL_DATASET_KEY || "316165");
+const scope = String(args.get("scope") || process.env.COL_SCOPE || "Animalia");
+const outputPath = resolve(args.get("output") || process.env.LIFECARDS_TAXONOMY_DB || "./data/animalia.sqlite");
+const archivePath = resolve(args.get("archive") || `./data/col-${datasetKey}-dwca.zip`);
+const keepArchive = args.get("keep-archive") === "true" || process.env.COL_KEEP_ARCHIVE === "1";
+const sourceUrl = `https://api.checklistbank.org/dataset/${encodeURIComponent(datasetKey)}/export.zip?extended=true&format=DwCA`;
+
+await mkdir(dirname(outputPath), { recursive: true });
+
+async function downloadArchive() {
+  if (existsSync(archivePath)) {
+    const info = await stat(archivePath);
+    if (info.size > 1024 * 1024) {
+      console.log(`Using existing archive ${archivePath} (${(info.size / 1024 / 1024).toFixed(1)} MB)`);
+      return;
+    }
+  }
+  console.log(`Downloading Catalogue of Life dataset ${datasetKey}…`);
+  console.log(sourceUrl);
+  const response = await fetch(sourceUrl, {
+    redirect: "follow",
+    headers: { "User-Agent": "LifeCards/0.1 (Catalogue of Life importer)" },
+  });
+  if (!response.ok || !response.body) {
+    throw new Error(`Catalogue of Life download failed: HTTP ${response.status}`);
+  }
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(archivePath));
+  const info = await stat(archivePath);
+  console.log(`Downloaded ${(info.size / 1024 / 1024).toFixed(1)} MB`);
+}
+
+function normalizeKey(key = "") {
+  return String(key).trim().split(/[\/#]/).at(-1).replace(/^dwc:/i, "").toLowerCase();
+}
+
+function normalizedRecord(record) {
+  const out = {};
+  for (const [key, value] of Object.entries(record)) out[normalizeKey(key)] = value;
+  return out;
+}
+
+function pick(row, ...keys) {
+  for (const key of keys) {
+    const value = row[String(key).toLowerCase()];
+    if (value != null && String(value).trim() !== "") return String(value).trim();
+  }
+  return "";
+}
+
+function acceptedRow(row) {
+  const status = pick(row, "taxonomicstatus", "status").toLowerCase();
+  const taxonId = pick(row, "taxonid", "nameusageid", "id");
+  const accepted = pick(row, "acceptednameusageid");
+  if (accepted && accepted !== taxonId) return false;
+  if (/(synonym|misapplied|ambiguous|unresolved|excluded)/i.test(status)) return false;
+  return true;
+}
+
+function inScope(row) {
+  if (scope.toLowerCase() === "all") return true;
+  const kingdom = pick(row, "kingdom");
+  const scientific = pick(row, "scientificname", "canonicalname");
+  return kingdom.toLowerCase() === scope.toLowerCase() || scientific.toLowerCase() === scope.toLowerCase();
+}
+
+function boolExtinct(value) {
+  return /^(1|true|yes|extinct)$/i.test(String(value || "").trim()) ? 1 : 0;
+}
+
+await downloadArchive();
+await rm(outputPath, { force: true });
+
+const db = new DatabaseSync(outputPath);
+db.exec(`
+  PRAGMA journal_mode=WAL;
+  PRAGMA synchronous=OFF;
+  PRAGMA temp_store=MEMORY;
+  CREATE TABLE meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+  CREATE TABLE taxa (
+    id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    scientific_name TEXT NOT NULL,
+    canonical_name TEXT,
+    authorship TEXT,
+    rank TEXT,
+    status TEXT,
+    extinct INTEGER NOT NULL DEFAULT 0,
+    kingdom TEXT,
+    source_dataset TEXT,
+    child_count INTEGER NOT NULL DEFAULT 0
+  );
+`);
+
+const insert = db.prepare(`
+  INSERT OR REPLACE INTO taxa
+    (id,parent_id,scientific_name,canonical_name,authorship,rank,status,extinct,kingdom,source_dataset)
+  VALUES (?,?,?,?,?,?,?,?,?,?)
+`);
+
+let accepted = 0;
+let species = 0;
+let seen = 0;
+let rootId = null;
+let headerChecked = false;
+
+db.exec("BEGIN");
+try {
+  const directory = await unzipper.Open.file(archivePath);
+  const taxonEntry = directory.files.find((entry) => /(^|\/)taxon\.txt$/i.test(entry.path));
+  if (!taxonEntry) throw new Error("DwCA archive does not contain taxon.txt");
+
+  const parser = taxonEntry.stream().pipe(parse({
+    columns: true,
+    delimiter: "\t",
+    relax_column_count: true,
+    relax_quotes: true,
+    bom: true,
+    skip_empty_lines: true,
+  }));
+
+  for await (const raw of parser) {
+    seen += 1;
+    const row = normalizedRecord(raw);
+
+    if (!headerChecked) {
+      headerChecked = true;
+      const scientific = pick(row, "scientificname", "canonicalname");
+      const id = pick(row, "taxonid", "nameusageid", "id");
+      if (!scientific || !id) {
+        throw new Error("Unsupported DwCA taxon.txt header: scientificName/taxonID were not found.");
+      }
+    }
+
+    if (!acceptedRow(row) || !inScope(row)) continue;
+
+    const id = pick(row, "taxonid", "nameusageid", "id");
+    const parentId = pick(row, "parentnameusageid", "parentid") || null;
+    const scientificName = pick(row, "scientificname", "canonicalname");
+    const canonicalName = pick(row, "canonicalname") || scientificName;
+    const authorship = pick(row, "scientificnameauthorship", "authorship");
+    const rank = pick(row, "taxonrank", "rank").toLowerCase();
+    const status = pick(row, "taxonomicstatus", "status") || "accepted";
+    const extinct = boolExtinct(pick(row, "extinct"));
+    const kingdom = pick(row, "kingdom");
+    const sourceDataset = pick(row, "datasetid", "sourceid");
+
+    if (!id || !scientificName) continue;
+
+    insert.run(id, parentId, scientificName, canonicalName, authorship, rank, status, extinct, kingdom, sourceDataset);
+    accepted += 1;
+    if (rank === "species") species += 1;
+    if (scientificName.toLowerCase() === scope.toLowerCase() && (!rootId || rank === "kingdom")) rootId = id;
+
+    if (accepted % 50000 === 0) {
+      db.exec("COMMIT; BEGIN");
+      console.log(`Imported ${accepted.toLocaleString()} accepted taxa (${species.toLocaleString()} species)…`);
+    }
+  }
+  db.exec("COMMIT");
+} catch (error) {
+  try { db.exec("ROLLBACK"); } catch {}
+  db.close();
+  throw error;
+}
+
+console.log("Building indexes and child counts…");
+db.exec(`
+  CREATE INDEX taxa_parent_idx ON taxa(parent_id);
+  CREATE INDEX taxa_scientific_idx ON taxa(scientific_name COLLATE NOCASE);
+  CREATE INDEX taxa_canonical_idx ON taxa(canonical_name COLLATE NOCASE);
+  CREATE INDEX taxa_rank_idx ON taxa(rank);
+  CREATE TEMP TABLE child_counts AS
+    SELECT parent_id AS id, COUNT(*) AS c
+    FROM taxa
+    WHERE parent_id IS NOT NULL
+    GROUP BY parent_id;
+  CREATE INDEX child_counts_id_idx ON child_counts(id);
+  UPDATE taxa
+  SET child_count = COALESCE((SELECT c FROM child_counts WHERE child_counts.id = taxa.id), 0);
+  DROP TABLE child_counts;
+`);
+
+if (!rootId && scope.toLowerCase() !== "all") {
+  rootId = db.prepare("SELECT id FROM taxa WHERE scientific_name = ? COLLATE NOCASE ORDER BY rank='kingdom' DESC LIMIT 1").get(scope)?.id ?? null;
+}
+if (!rootId) {
+  rootId = db.prepare("SELECT id FROM taxa WHERE parent_id IS NULL ORDER BY child_count DESC LIMIT 1").get()?.id ?? null;
+}
+
+const setMeta = db.prepare("INSERT OR REPLACE INTO meta(key,value) VALUES (?,?)");
+const release = `ChecklistBank dataset ${datasetKey}`;
+for (const [key, value] of Object.entries({
+  dataset_key: datasetKey,
+  release,
+  scope,
+  source_url: sourceUrl,
+  imported_at: new Date().toISOString(),
+  taxon_count: String(accepted),
+  species_count: String(species),
+  scanned_rows: String(seen),
+  root_id: String(rootId || ""),
+})) setMeta.run(key, value);
+
+db.exec("PRAGMA optimize;");
+db.close();
+
+if (!keepArchive) await rm(archivePath, { force: true });
+
+console.log("");
+console.log("Catalogue of Life import complete.");
+console.log(`Scope: ${scope}`);
+console.log(`Accepted taxa: ${accepted.toLocaleString()}`);
+console.log(`Species: ${species.toLocaleString()}`);
+console.log(`Database: ${outputPath}`);
+console.log(`Root taxon id: ${rootId}`);
