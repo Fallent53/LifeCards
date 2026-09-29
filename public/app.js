@@ -9,7 +9,10 @@ const ui={
   query:"",
   reveal:null,
   revealIndex:0,
-  opening:false
+  opening:false,
+  knowledgeQuestion:null,
+  knowledgeResult:null,
+  knowledgeLoading:false
 };
 
 const main=document.getElementById("main");
@@ -37,6 +40,8 @@ const TITLES={
   collection:["YOUR ARCHIVE","Collection"],
   tree:["PHYLOGENETIC ALBUM","Tree of Life"],
   market:["SECONDARY MARKET","Market"],
+  knowledge:["KNOWLEDGE LAB","Knowledge"],
+  profile:["COLLECTOR PROFILE","Profile"],
   codex:["LIVING ENCYCLOPEDIA","Codex"]
 };
 
@@ -208,6 +213,8 @@ function render(){
   if(ui.view==="collection")renderCollection();
   if(ui.view==="tree")renderTree();
   if(ui.view==="market")renderMarket();
+  if(ui.view==="knowledge")renderKnowledge();
+  if(ui.view==="profile")renderProfile();
   if(ui.view==="codex")renderCodex();
   wireCommon();
 }
@@ -322,6 +329,119 @@ function renderTree(){
     '</section>';
   document.querySelectorAll("[data-definition]").forEach(node=>node.onclick=()=>openDefinition(node.dataset.definition));
 
+}
+
+function achievementIcon(id){
+  const map={
+    "first-discovery":"✦",
+    "field-naturalist":"☘",
+    "branch-collector":"⌘",
+    "holographic":"◇",
+    "wild-archive":"◈",
+    "deep-time":"◌",
+    "the-origin":"✺"
+  };
+  return map[id]||"•";
+}
+
+function renderProfile(){
+  const p=ui.state.profile;
+  const rarest=[...ui.state.inventory]
+    .sort((a,b)=>{
+      const order=["COMMON","UNCOMMON","RARE","SUPER_RARE","ULTRA_RARE","LEGENDARY","MYTHIC","UNKNOWN"];
+      return order.indexOf(b.rarity)-order.indexOf(a.rarity);
+    })
+    .slice(0,4);
+
+  main.innerHTML=
+    '<section class="profile-page">'+
+      '<div class="profile-hero">'+
+        '<div class="profile-avatar">E</div>'+
+        '<div><span class="eyebrow">FIELD RESEARCHER</span><h1>Explorer</h1><p>Collector, taxonomist and keeper of a growing Tree of Life archive.</p></div>'+
+        '<div class="profile-level"><small>KNOWLEDGE</small><b>'+formatNumber(p.knowledge.points)+'</b><span>'+p.knowledge.correctAnswers+' correct · '+Math.round(p.knowledge.accuracy*100)+'% accuracy</span></div>'+
+      '</div>'+
+      '<div class="profile-stats">'+
+        '<article><span>Total cards</span><b>'+formatNumber(p.totalCards)+'</b></article>'+
+        '<article><span>Species</span><b>'+formatNumber(p.uniqueSpecies)+'</b></article>'+
+        '<article><span>Taxa</span><b>'+formatNumber(p.uniqueTaxa)+'</b></article>'+
+        '<article><span>Wild</span><b>'+formatNumber(p.wild)+'</b></article>'+
+        '<article><span>Holo</span><b>'+formatNumber(p.holo)+'</b></article>'+
+        '<article><span>Fossils</span><b>'+formatNumber(p.fossil)+'</b></article>'+
+      '</div>'+
+      '<div class="section-head"><div><span class="eyebrow">ACHIEVEMENTS</span><h2>Milestones</h2></div></div>'+
+      '<div class="achievement-grid">'+p.achievements.map(a=>
+        '<article class="achievement '+(a.unlocked?"unlocked":"locked")+'"><span>'+achievementIcon(a.id)+'</span><div><b>'+esc(a.name)+'</b><p>'+esc(a.description)+'</p></div><i>'+(a.unlocked?"UNLOCKED":"LOCKED")+'</i></article>'
+      ).join("")+'</div>'+
+      '<div class="section-head"><div><span class="eyebrow">SHOWCASE</span><h2>Rarest cards</h2></div></div>'+
+      '<div class="card-grid profile-showcase">'+(rarest.length?rarest.map(card=>cardHtml(card,{compact:true})).join(""):'<div class="empty-state">Open packs to build a showcase.</div>')+'</div>'+
+    '</section>';
+  warmMedia(rarest.map(c=>c.definition));
+}
+
+function renderKnowledge(){
+  const stats=ui.state.profile.knowledge;
+  const q=ui.knowledgeQuestion;
+  const result=ui.knowledgeResult;
+
+  main.innerHTML=
+    '<section class="knowledge-page">'+
+      '<div class="knowledge-hero">'+
+        '<div><span class="eyebrow">KNOWLEDGE LAB</span><h1>Learn the tree by playing.</h1><p>Questions are generated from LifeCards’ current taxonomy snapshot. Knowledge progression never changes card power or drop odds.</p></div>'+
+        '<div class="knowledge-score"><small>KNOWLEDGE POINTS</small><b>'+formatNumber(stats.points)+'</b><span>Streak '+stats.streak+' · Best '+stats.bestStreak+'</span></div>'+
+      '</div>'+
+      '<div class="knowledge-board">'+
+        (!q
+          ? '<div class="quiz-empty"><span class="quiz-symbol">⌘</span><h2>Ready for a field question?</h2><p>Taxonomy, ranks and relationships from the current Tree of Life snapshot.</p><button id="newQuestion" class="primary-cta">Start question</button></div>'
+          : '<div class="quiz-card">'+
+              '<div class="quiz-top"><span>QUESTION</span><b>'+esc(q.prompt)+'</b></div>'+
+              '<div class="quiz-options">'+q.options.map(option=>
+                '<button data-option="'+esc(option)+'" '+(result?"disabled":"")+' class="'+(result&&option===result.correctOption?"correct":"")+'">'+esc(option)+'</button>'
+              ).join("")+'</div>'+
+              (result
+                ? '<div class="quiz-result '+(result.correct?"right":"wrong")+'"><b>'+(result.correct?"Correct":"Not this time")+'</b><p>'+esc(result.explanation||"")+'</p><span>+'+result.pointsEarned+' knowledge · +'+result.coinReward+' coins</span><button id="nextQuestion">Next question →</button></div>'
+                : '<div class="quiz-foot">Choose one answer. The explanation appears after validation.</div>')+
+            '</div>')+
+      '</div>'+
+      '<div class="knowledge-stats">'+
+        '<div><span>Correct</span><b>'+stats.correctAnswers+'</b></div>'+
+        '<div><span>Answered</span><b>'+stats.totalAnswers+'</b></div>'+
+        '<div><span>Accuracy</span><b>'+Math.round(stats.accuracy*100)+'%</b></div>'+
+        '<div><span>Current streak</span><b>'+stats.streak+'</b></div>'+
+      '</div>'+
+    '</section>';
+
+  document.getElementById("newQuestion")?.addEventListener("click",requestKnowledgeQuestion);
+  document.getElementById("nextQuestion")?.addEventListener("click",requestKnowledgeQuestion);
+  document.querySelectorAll("[data-option]").forEach(button=>{
+    button.onclick=()=>answerKnowledge(button.dataset.option);
+  });
+}
+
+async function requestKnowledgeQuestion(){
+  if(ui.knowledgeLoading)return;
+  ui.knowledgeLoading=true;
+  try{
+    const response=await api("/api/knowledge/question",{method:"POST",body:"{}"});
+    ui.knowledgeQuestion=response.question;
+    ui.knowledgeResult=null;
+    renderKnowledge();
+  }catch(error){flash(error.message)}
+  finally{ui.knowledgeLoading=false}
+}
+
+async function answerKnowledge(option){
+  if(!ui.knowledgeQuestion||ui.knowledgeResult||ui.knowledgeLoading)return;
+  ui.knowledgeLoading=true;
+  try{
+    const response=await api("/api/knowledge/answer",{
+      method:"POST",
+      body:JSON.stringify({questionId:ui.knowledgeQuestion.id,option})
+    });
+    ui.knowledgeResult=response.result;
+    await refresh(false);
+    renderKnowledge();
+  }catch(error){flash(error.message)}
+  finally{ui.knowledgeLoading=false}
 }
 
 function renderCodex(){
