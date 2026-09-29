@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getWikipediaFileMetadata, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
+import { getCommonsFileMetadata, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v7";
@@ -333,6 +333,206 @@ export async function getKnowledgeBatch(entries, { lang = "en", concurrency = 4 
 
   await Promise.all(
     Array.from({ length: Math.min(workerCount, normalized.length || 1) }, () => worker())
+  );
+
+  return output;
+}
+
+
+function lowerKey(value=""){
+  return String(value||"").trim().toLowerCase();
+}
+
+async function wikipediaPagesBatch(entries,{lang="en"}={}){
+  const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
+  const queries=[...new Set(entries.map((entry)=>String(entry.query||"").trim()).filter(Boolean))];
+  const output=new Map();
+
+  for(let offset=0;offset<queries.length;offset+=40){
+    const chunk=queries.slice(offset,offset+40);
+    const params=new URLSearchParams({
+      action:"query",
+      format:"json",
+      origin:"*",
+      redirects:"1",
+      prop:"pageimages|pageprops|info",
+      titles:chunk.join("|"),
+      piprop:"thumbnail|name|original",
+      pilicense:"free",
+      pithumbsize:"1200",
+      inprop:"url",
+    });
+
+    let json=null;
+    try{
+      json=await fetchJson(`https://${safeLang}.wikipedia.org/w/api.php?${params}`,10000);
+    }catch{
+      json=null;
+    }
+    if(!json)continue;
+
+    const aliases=new Map();
+    for(const item of json?.query?.normalized??[]){
+      aliases.set(lowerKey(item.from),item.to);
+    }
+    for(const item of json?.query?.redirects??[]){
+      aliases.set(lowerKey(item.from),item.to);
+    }
+
+    const pages=Object.values(json?.query?.pages??{}).filter((page)=>page&&!page.missing);
+    const pageByTitle=new Map(pages.map((page)=>[lowerKey(page.title),page]));
+
+    for(const original of chunk){
+      let title=original;
+      const seen=new Set();
+      while(aliases.has(lowerKey(title))&&!seen.has(lowerKey(title))){
+        seen.add(lowerKey(title));
+        title=aliases.get(lowerKey(title));
+      }
+      const page=pageByTitle.get(lowerKey(title))||pageByTitle.get(lowerKey(original))||null;
+      if(page)output.set(lowerKey(original),page);
+    }
+  }
+
+  return output;
+}
+
+async function wikidataEntitiesBatch(qids,{lang="en"}={}){
+  const unique=[...new Set(qids.filter(Boolean))];
+  const output={};
+
+  for(let offset=0;offset<unique.length;offset+=40){
+    const chunk=unique.slice(offset,offset+40);
+    const params=new URLSearchParams({
+      action:"wbgetentities",
+      format:"json",
+      origin:"*",
+      ids:chunk.join("|"),
+      props:"claims|labels|descriptions|sitelinks",
+      languages:`${lang}|en`,
+    });
+
+    try{
+      const json=await fetchJson(`https://www.wikidata.org/w/api.php?${params}`,10000);
+      Object.assign(output,json?.entities??{});
+    }catch{}
+  }
+
+  return output;
+}
+
+export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
+  const normalized=[];
+  const seen=new Set();
+
+  for(const entry of Array.isArray(entries)?entries:[]){
+    const id=String(entry?.id??"").trim();
+    const query=String(entry?.query??"").trim();
+    if(!id||!query||seen.has(id))continue;
+    seen.add(id);
+    normalized.push({id,query});
+  }
+  if(!normalized.length)return {};
+
+  const pages=await wikipediaPagesBatch(normalized,{lang});
+  const qids=[...new Set(
+    [...pages.values()].map((page)=>page?.pageprops?.wikibase_item).filter(Boolean)
+  )];
+  const entities=await wikidataEntitiesBatch(qids,{lang});
+
+  const pageImages=[...new Set(
+    [...pages.values()].map((page)=>page?.pageimage).filter(Boolean)
+  )];
+  const fileMetadata=await getWikipediaFilesMetadataBatch(pageImages,lang);
+
+  const output={};
+  const fallback=[];
+
+  for(const entry of normalized){
+    const page=pages.get(lowerKey(entry.query))||null;
+    const qid=page?.pageprops?.wikibase_item||null;
+    const entity=qid?entities[qid]||null:null;
+    const taxonName=claimValue(entity,"P225")||entry.query;
+    const taxId=claimValue(entity,"P685");
+    const exactTaxonIdentity=Boolean(
+      claimValue(entity,"P225") &&
+      lowerKey(claimValue(entity,"P225"))===lowerKey(entry.query)
+    );
+
+    let media=null;
+    if(page?.pageimage){
+      const meta=fileMetadata[lowerKey(page.pageimage)]||null;
+      media=meta||wikipediaThumbnailFallback(page,lang);
+      if(media){
+        media={
+          ...media,
+          resolver:"wikipedia-pageimage-batch",
+          confidence:exactTaxonIdentity?"HIGH":"MEDIUM",
+          exactTaxonIdentity,
+        };
+      }
+    }
+
+    if(page&&media){
+      const value={
+        query:entry.query,
+        wikipedia:{
+          title:page.title,
+          extract:"",
+          description:entity?.descriptions?.[lang]?.value||entity?.descriptions?.en?.value||null,
+          pageUrl:page.fullurl||`https://${lang}.wikipedia.org/wiki/${encodeURIComponent(page.title.replaceAll(" ","_"))}`,
+          thumbnailUrl:page.thumbnail?.source||null,
+          pageImage:page.pageimage||null,
+          language:lang,
+        },
+        wikidata:qid?{
+          id:qid,
+          pageUrl:`https://www.wikidata.org/wiki/${qid}`,
+          taxonName,
+          ncbiTaxId:taxId,
+          imageFile:claimValue(entity,"P18"),
+        }:null,
+        taxonomy:{
+          ncbiTaxId:taxId,
+          ncbiUrl:ncbiUrlForTaxId(taxId),
+          lifemapUrl:lifemapUrlForTaxId(taxId),
+        },
+        media,
+        sources:["Wikipedia",entity?"Wikidata":null,media.source,taxId?"NCBI Taxonomy / Lifemap NCBI":null].filter(Boolean),
+        sourceStatus:{
+          wikipedia:"ok",
+          wikidata:entity?"ok":"unavailable",
+          media:"ok",
+          lifemap:taxId?"linked":"unresolved",
+        },
+        resolvedAt:new Date().toISOString(),
+      };
+      output[entry.id]=value;
+
+      const persistedQuery=`${CACHE_SCHEMA_VERSION}:${entry.query.toLowerCase()}`;
+      cache.set(`${lang}:${persistedQuery}`,{storedAt:Date.now(),value});
+      writePersistentCache(persistedQuery,lang,value);
+    }else{
+      fallback.push(entry);
+    }
+  }
+
+  // Only unresolved taxa use the expensive per-item fallback chain.
+  let cursor=0;
+  async function fallbackWorker(){
+    while(cursor<fallback.length){
+      const entry=fallback[cursor++];
+      try{
+        output[entry.id]=await getKnowledge(entry.query,{lang});
+      }catch{
+        output[entry.id]=null;
+      }
+      await new Promise((resolve)=>setTimeout(resolve,90));
+    }
+  }
+
+  await Promise.all(
+    Array.from({length:Math.min(2,fallback.length||1)},()=>fallbackWorker())
   );
 
   return output;
