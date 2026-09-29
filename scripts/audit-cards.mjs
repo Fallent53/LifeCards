@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v6-clean-names-exact-wikipedia";
+const AUDIT_RESOLVER_VERSION="v7-wikipedia-commons-metadata-batch";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
