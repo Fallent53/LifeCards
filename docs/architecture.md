@@ -20,3 +20,15 @@ Pack opening executes in an immediate transaction. Serial allocation is unique p
 
 ## Production roadmap
 Move auth to passkeys/OAuth, SQLite to PostgreSQL, add Redis for rate limits/caches, ingest versioned taxonomy datasets, implement immutable provenance/audit records, anti-bot/device-risk controls, auctions/offers/guilds and scientific editorial tooling.
+
+
+## Scientific provider layer
+
+`src/science.mjs` combines:
+- Wikipedia: human-readable overview;
+- NCBI Taxonomy: stable taxonomic identifier/rank;
+- Lifemap: external tree deep-link generated from the NCBI taxid.
+
+`src/media.mjs` selects licensed Wikimedia Commons imagery and persists creator/license attribution. External API responses are cached in SQLite through `external_cache`; the PostgreSQL production schema contains an equivalent table.
+
+The external providers enrich cards but do not control ownership, RNG, serial allocation or card supply.
