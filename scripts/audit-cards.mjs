@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v15-exact-natural-media";
+const AUDIT_RESOLVER_VERSION="v16-inat-exact-taxon-id";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const auditCollection=args.get("collection")==="true";
