@@ -23,8 +23,18 @@ if (args.has("--catalog") || !existsSync(dbPath)) {
 if (existsSync(dbPath)) {
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const rows = db.prepare("SELECT DISTINCT definition_id FROM cards").all();
-    for (const row of rows) addDefinition(byId.get(row.definition_id));
+    const columns = new Set(db.prepare("PRAGMA table_info(cards)").all().map((row) => row.name));
+    const rows = columns.has("definition_json")
+      ? db.prepare("SELECT DISTINCT definition_id, definition_json FROM cards").all()
+      : db.prepare("SELECT DISTINCT definition_id, NULL AS definition_json FROM cards").all();
+
+    for (const row of rows) {
+      let definition = byId.get(row.definition_id);
+      if (!definition && row.definition_json) {
+        try { definition = JSON.parse(row.definition_json); } catch {}
+      }
+      addDefinition(definition);
+    }
   } finally {
     db.close();
   }
