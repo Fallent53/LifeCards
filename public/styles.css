@@ -184,3 +184,5 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .recent-grid{grid-template-columns:repeat(6,minmax(190px,1fr));gap:24px}
   .section-head{margin-top:58px}
 }
+
+.source-button.col{border-color:#3f7d57;color:#91e6ad;background:#0e2116}
