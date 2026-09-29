@@ -217,13 +217,37 @@ function scientificNameVariants(value = "") {
   return [...new Set(values)];
 }
 
-function acceptedOpenLicense(value = "") {
+function mediaLicenseClass(value = "") {
   const license=String(value||"").trim().toLowerCase();
-  if(!license)return false;
-  if(license==="cc0"||license==="cc-by"||license==="cc-by-sa")return true;
-  if(license.includes("creativecommons.org/publicdomain")||license.includes("creativecommons.org/zero"))return true;
-  if(license.includes("creativecommons.org/licenses/by/")||license.includes("creativecommons.org/licenses/by-sa/"))return true;
-  return false;
+  if(!license)return "unknown";
+
+  if(
+    license==="cc0" ||
+    license==="cc-by" ||
+    license==="cc-by-sa" ||
+    license.includes("creativecommons.org/publicdomain") ||
+    license.includes("creativecommons.org/zero") ||
+    license.includes("creativecommons.org/licenses/by/") ||
+    license.includes("creativecommons.org/licenses/by-sa/")
+  )return "commercial";
+
+  if(
+    license==="cc-by-nc" ||
+    license==="cc-by-nc-sa" ||
+    license.includes("creativecommons.org/licenses/by-nc/") ||
+    license.includes("creativecommons.org/licenses/by-nc-sa/")
+  )return "noncommercial";
+
+  return "unknown";
+}
+
+function acceptedOpenLicense(value = "") {
+  return mediaLicenseClass(value)==="commercial";
+}
+
+function acceptedPrototypeLicense(value = "") {
+  const kind=mediaLicenseClass(value);
+  return kind==="commercial"||kind==="noncommercial";
 }
 
 function largeINaturalistPhotoUrl(url = "") {
@@ -502,6 +526,7 @@ async function resolveINaturalistTaxon(scientificName,{rank=""}={}) {
           id:Number(exact.id),
           name:String(exact.name||candidate),
           rank:String(exact.rank||rank||""),
+          defaultPhoto:exact.default_photo||null,
         };
         inaturalistTaxonCache.set(key,value);
         return value;
@@ -513,11 +538,74 @@ async function resolveINaturalistTaxon(scientificName,{rank=""}={}) {
   return null;
 }
 
-export async function searchINaturalistImage(scientificName,{allowDescendant=false,rank=""}={}) {
+function mediaFromINaturalistPhoto(photo,{query,target,source,prototype=false}={}) {
+  if(!photo)return null;
+  const license=String(photo.license_code||"").toLowerCase();
+  const accepted=prototype?acceptedPrototypeLicense(license):acceptedOpenLicense(license);
+  if(!accepted)return null;
+
+  const imageUrl=largeINaturalistPhotoUrl(
+    photo.medium_url||photo.url||photo.original_url||""
+  );
+  if(!imageUrl)return null;
+
+  const creator=cleanHtml(
+    photo.attribution||
+    photo.user?.name||
+    photo.user?.login||
+    "iNaturalist contributor"
+  );
+
+  return {
+    imageUrl,
+    originalUrl:
+      photo.original_url||
+      photo.url||
+      (target?.id?`https://www.inaturalist.org/taxa/${target.id}`:imageUrl),
+    title:target?.name||query,
+    creator,
+    license:license.toUpperCase(),
+    licenseUrl:
+      license==="cc0"
+        ?"https://creativecommons.org/publicdomain/zero/1.0/"
+        :`https://creativecommons.org/licenses/${license.replace("cc-","")}/4.0/`,
+    attribution:creator,
+    source:source||"iNaturalist taxon photo",
+    inaturalistTaxonId:target?.id||null,
+    mediaMatch:"EXACT_TAXON_PHOTO",
+    commercialReady:mediaLicenseClass(license)==="commercial",
+    naturalContext:"unverified",
+  };
+}
+
+export async function searchINaturalistTaxonPhoto(scientificName,{rank="",prototype=false}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
 
-  const key=`inat:${allowDescendant?"desc:":"exact:"}${String(rank||"").toLowerCase()}:${comparableScientificName(query)}`;
+  const key=`inat-taxon-photo:${prototype?"prototype":"commercial"}:${String(rank||"").toLowerCase()}:${comparableScientificName(query)}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const target=await resolveINaturalistTaxon(query,{rank});
+  if(!target?.defaultPhoto){
+    memoryCache.set(key,null);
+    return null;
+  }
+
+  const result=mediaFromINaturalistPhoto(target.defaultPhoto,{
+    query,
+    target,
+    source:"iNaturalist exact taxon photo",
+    prototype,
+  });
+  memoryCache.set(key,result);
+  return result;
+}
+
+export async function searchINaturalistImage(scientificName,{allowDescendant=false,rank="",prototype=false}={}) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+
+  const key=`inat:${prototype?"prototype:":"commercial:"}${allowDescendant?"desc:":"exact:"}${String(rank||"").toLowerCase()}:${comparableScientificName(query)}`;
   if(memoryCache.has(key))return memoryCache.get(key);
 
   const target=await resolveINaturalistTaxon(query,{rank});
@@ -530,7 +618,9 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
     photos:"true",
     quality_grade:"research",
     captive:"false",
-    photo_license:"cc0,cc-by,cc-by-sa",
+    photo_license:prototype
+      ?"cc0,cc-by,cc-by-sa,cc-by-nc,cc-by-nc-sa"
+      :"cc0,cc-by,cc-by-sa",
     per_page:"60",
     order:"desc",
     order_by:"votes",
@@ -571,7 +661,7 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
 
     for(const photo of photos){
       const license=String(photo.license_code||"").toLowerCase();
-      if(!acceptedOpenLicense(license))continue;
+      if(!(prototype?acceptedPrototypeLicense(license):acceptedOpenLicense(license)))continue;
       const imageUrl=largeINaturalistPhotoUrl(photo.url);
       if(!imageUrl)continue;
 
@@ -597,6 +687,8 @@ export async function searchINaturalistImage(scientificName,{allowDescendant=fal
         observationId:observation.id||null,
         inaturalistTaxonId:target?.id||observation?.taxon?.id||null,
         mediaMatch:exact?"EXACT":"REPRESENTATIVE_DESCENDANT",
+        commercialReady:mediaLicenseClass(license)==="commercial",
+        naturalContext:"wild-research-grade",
       };
       memoryCache.set(key,result);
       return result;
@@ -682,7 +774,101 @@ export async function searchEolImage(scientificName) {
   return null;
 }
 
-export async function searchSupplementalRealMedia(scientificName,{rank="",extinct=false}={}) {
+function likelyPhotographicCommonsTitle(value=""){
+  const title=String(value||"").toLowerCase();
+  if(!title)return false;
+  if(/\.svg(?:\?|$)/i.test(title))return false;
+  if(/\b(icon|logo|diagram|drawing|illustration|cladogram|phylogeny|silhouette|symbol|map|range|reconstruction)\b/i.test(title))return false;
+  return true;
+}
+
+function firstReusableCommonsPage(json,sourceLabel){
+  for(const page of Object.values(json?.query?.pages??{})){
+    if(!likelyPhotographicCommonsTitle(page?.title))continue;
+    const media=mediaFromPage(page,sourceLabel);
+    if(media)return media;
+  }
+  return null;
+}
+
+export async function searchCommonsCategoryImage(scientificName) {
+  const query=String(scientificName||"").trim();
+  if(!query)return null;
+  const key=`commons-category:${query.toLowerCase()}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const params=new URLSearchParams({
+    action:"query",
+    format:"json",
+    origin:"*",
+    generator:"categorymembers",
+    gcmtitle:`Category:${query}`,
+    gcmtype:"file",
+    gcmlimit:"30",
+    prop:"imageinfo",
+    iiprop:"url|extmetadata",
+    iiextmetadatafilter:"Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
+    iiurlwidth:"1200",
+  });
+
+  try{
+    const json=await commonsQuery(params);
+    const media=firstReusableCommonsPage(json,"Wikimedia Commons taxon category");
+    if(media){
+      const result={
+        ...media,
+        mediaMatch:"EXACT_TAXON_CATEGORY",
+        commercialReady:true,
+      };
+      memoryCache.set(key,result);
+      return result;
+    }
+  }catch{}
+
+  memoryCache.set(key,null);
+  return null;
+}
+
+export async function searchCommonsDepictsImage(wikidataId) {
+  const qid=String(wikidataId||"").trim().toUpperCase();
+  if(!/^Q\d+$/.test(qid))return null;
+  const key=`commons-depicts:${qid}`;
+  if(memoryCache.has(key))return memoryCache.get(key);
+
+  const params=new URLSearchParams({
+    action:"query",
+    format:"json",
+    origin:"*",
+    generator:"search",
+    gsrsearch:`haswbstatement:P180=${qid}`,
+    gsrnamespace:"6",
+    gsrlimit:"30",
+    prop:"imageinfo",
+    iiprop:"url|extmetadata",
+    iiextmetadatafilter:"Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
+    iiurlwidth:"1200",
+  });
+
+  try{
+    const json=await commonsQuery(params);
+    const media=firstReusableCommonsPage(json,"Wikimedia Commons structured depicts");
+    if(media){
+      const result={
+        ...media,
+        mediaMatch:"WIKIDATA_DEPICTS",
+        wikidataId:qid,
+        commercialReady:true,
+      };
+      memoryCache.set(key,result);
+      return result;
+    }
+  }catch{}
+
+  memoryCache.set(key,null);
+  return null;
+}
+
+export async function searchSupplementalRealMedia(scientificName,{rank="",extinct=false,wikidataId=null}={}) {
   const query=String(scientificName||"").trim();
   if(!query)return null;
 
@@ -691,12 +877,13 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
     "species","subspecies","variety","subvariety","form","subform","strain"
   ].includes(rankKey);
 
-  // Living species: prefer research-grade iNaturalist observations. Research
-  // Grade is specifically designed around verifiable, wild/naturalized
-  // observations and is a much better gameplay image than museum drawers.
   if(speciesLike&&!extinct){
     try{
-      const inat=await searchINaturalistImage(query,{allowDescendant:false,rank});
+      const inat=await searchINaturalistImage(query,{
+        allowDescendant:false,
+        rank,
+        prototype:false,
+      });
       if(inat)return {
         ...inat,
         resolver:"inaturalist-exact-wild",
@@ -714,15 +901,27 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
           :"gbif-exact-field-observation",
         confidence:"HIGH",
         mediaMatch:"EXACT_FIELD",
+        commercialReady:true,
+      };
+    }catch{}
+
+    try{
+      const taxonPhoto=await searchINaturalistTaxonPhoto(query,{rank,prototype:false});
+      if(taxonPhoto)return {
+        ...taxonPhoto,
+        resolver:"inaturalist-exact-taxon-photo",
+        confidence:"MEDIUM",
       };
     }catch{}
   }
 
-  // Higher taxa do not correspond to a single organism. A real, wild
-  // descendant is preferable to fossils, diagrams or arbitrary page images.
   if(!speciesLike){
     try{
-      const inat=await searchINaturalistImage(query,{allowDescendant:true,rank});
+      const inat=await searchINaturalistImage(query,{
+        allowDescendant:true,
+        rank,
+        prototype:false,
+      });
       if(inat)return {
         ...inat,
         resolver:"inaturalist-taxon-representative",
@@ -730,39 +929,103 @@ export async function searchSupplementalRealMedia(scientificName,{rank="",extinc
         mediaMatch:"REPRESENTATIVE_DESCENDANT_WILD",
       };
     }catch{}
+
+    try{
+      const taxonPhoto=await searchINaturalistTaxonPhoto(query,{rank,prototype:false});
+      if(taxonPhoto)return {
+        ...taxonPhoto,
+        resolver:"inaturalist-taxon-photo",
+        confidence:"MEDIUM",
+      };
+    }catch{}
   }
 
-  // Exact occurrence / accepted-name fallback. For living species fieldOnly
-  // above already had priority; specimen media is only considered later.
+  if(wikidataId){
+    try{
+      const depicts=await searchCommonsDepictsImage(wikidataId);
+      if(depicts)return {
+        ...depicts,
+        resolver:"commons-wikidata-depicts",
+        confidence:"HIGH",
+      };
+    }catch{}
+  }
+
+  try{
+    const category=await searchCommonsCategoryImage(query);
+    if(category)return {
+      ...category,
+      resolver:"commons-taxon-category",
+      confidence:"HIGH",
+    };
+  }catch{}
+
   try{
     const gbif=await searchGbifImage(query,{fieldOnly:false});
     if(gbif)return {
       ...gbif,
       resolver:gbif.resolverHint||"gbif-exact-or-accepted",
       confidence:"HIGH",
+      commercialReady:true,
     };
   }catch{}
 
-  // Museum specimens are useful for extinct or genuinely obscure taxa, but
-  // should never outrank wild photographs.
-  try{
-    const specimen=await searchIDigBioImage(query,{rank});
-    if(specimen)return {
-      ...specimen,
-      resolver:specimen.mediaMatch==="EXACT_SPECIMEN"
-        ?"idigbio-exact-specimen"
-        :"idigbio-representative-specimen",
-      confidence:specimen.mediaMatch==="EXACT_SPECIMEN"?"HIGH":"MEDIUM",
-    };
-  }catch{}
+  if(extinct){
+    try{
+      const specimen=await searchIDigBioImage(query,{rank});
+      if(specimen)return {
+        ...specimen,
+        resolver:specimen.mediaMatch==="EXACT_SPECIMEN"
+          ?"idigbio-exact-specimen"
+          :"idigbio-representative-specimen",
+        confidence:specimen.mediaMatch==="EXACT_SPECIMEN"?"HIGH":"MEDIUM",
+        commercialReady:true,
+      };
+    }catch{}
+  }
 
   try{
     const commons=await searchCommonsImage(query,{exact:true});
-    if(commons)return {...commons,resolver:"commons-exact",confidence:"MEDIUM"};
+    if(commons)return {
+      ...commons,
+      resolver:"commons-exact",
+      confidence:"MEDIUM",
+      commercialReady:true,
+    };
   }catch{}
 
-  // No same-genus substitution for species. If the exact species is absent,
-  // keep it unavailable rather than showing the wrong animal.
+  // Prototype-only last chance: exact real iNaturalist photo under a
+  // non-commercial Creative Commons license. It can be displayed locally,
+  // but it is never inserted into the commercial READY drop pool.
+  try{
+    const exactTaxonPhoto=await searchINaturalistTaxonPhoto(query,{
+      rank,
+      prototype:true,
+    });
+    if(exactTaxonPhoto&&!exactTaxonPhoto.commercialReady)return {
+      ...exactTaxonPhoto,
+      resolver:"inaturalist-exact-taxon-photo-nc",
+      confidence:"MEDIUM",
+      prototypeDisplayOnly:true,
+    };
+  }catch{}
+
+  if(speciesLike&&!extinct){
+    try{
+      const prototypeWild=await searchINaturalistImage(query,{
+        allowDescendant:false,
+        rank,
+        prototype:true,
+      });
+      if(prototypeWild&&!prototypeWild.commercialReady)return {
+        ...prototypeWild,
+        resolver:"inaturalist-exact-wild-nc",
+        confidence:"HIGH",
+        prototypeDisplayOnly:true,
+      };
+    }catch{}
+  }
+
   return null;
 }
 
