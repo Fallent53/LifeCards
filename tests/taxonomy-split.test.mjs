@@ -107,6 +107,8 @@ const qualityDb=new DatabaseSync(qualityPath);
 qualityDb.exec(`
   CREATE TABLE meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
   INSERT INTO meta(key,value) VALUES ('complete','1');
+  INSERT INTO meta(key,value) VALUES ('taxonomy_scope','Eukaryota');
+  INSERT INTO meta(key,value) VALUES ('resolver_version','v3-canonical-authorship-wikipedia');
   CREATE TABLE card_quality(
     taxon_id TEXT PRIMARY KEY,
     status TEXT NOT NULL
