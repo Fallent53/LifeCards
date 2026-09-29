@@ -149,9 +149,15 @@ function cardQualityStatus() {
     Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0) >= totalDroppable;
 
   const checked = Object.values(counts).reduce((sum, count) => sum + Number(count || 0), 0);
+  const readyPoolCount =
+    compatible &&
+    tableExists(db, "ready_drop_pool")
+      ? Number(db.prepare("SELECT COUNT(*) AS count FROM ready_drop_pool").get()?.count || 0)
+      : 0;
+
   const readyPoolActive =
-    complete &&
-    tableExists(db, "ready_drop_pool") &&
+    compatible &&
+    readyPoolCount > 0 &&
     tableExists(db, "ready_drop_pool_stats");
 
   return {
@@ -166,6 +172,7 @@ function cardQualityStatus() {
     checked,
     totalDroppable,
     readyPoolActive,
+    readyPoolCount,
     resolverVersion,
     auditedScope,
     databasePath: cardQualityPath,
@@ -430,15 +437,34 @@ export function pickDropTaxon(rarity, rng) {
       const stat = qdb
         .prepare("SELECT card_count FROM ready_drop_pool_stats WHERE rarity = ?")
         .get(String(rarity));
+      let ready = null;
+      let selectedRarity = String(rarity);
       const count = Number(stat?.card_count || 0);
-      if (!count) return null;
 
-      const slot =
-        (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
-      const ready = qdb
-        .prepare("SELECT taxon_id FROM ready_drop_pool WHERE rarity = ? AND slot = ? LIMIT 1")
-        .get(String(rarity), slot);
-      if (!ready?.taxon_id) return null;
+      if (count > 0) {
+        const slot =
+          (rng?.int ? rng.int(count) : Math.floor(Math.random() * count)) + 1;
+        ready = qdb
+          .prepare("SELECT taxon_id FROM ready_drop_pool WHERE rarity = ? AND slot = ? LIMIT 1")
+          .get(selectedRarity, slot);
+      }
+
+      // During progressive auditing some rarity buckets may still be empty.
+      // Stay inside the verified real-media pool rather than falling back to
+      // an unaudited/no-image taxon.
+      if (!ready?.taxon_id) {
+        const total = Number(
+          qdb.prepare("SELECT COUNT(*) AS count FROM ready_drop_pool").get()?.count || 0
+        );
+        if (!total) return null;
+        const offset = rng?.int ? rng.int(total) : Math.floor(Math.random() * total);
+        const fallback = qdb
+          .prepare("SELECT taxon_id,rarity FROM ready_drop_pool ORDER BY rarity,slot LIMIT 1 OFFSET ?")
+          .get(offset);
+        if (!fallback?.taxon_id) return null;
+        ready = fallback;
+        selectedRarity = String(fallback.rarity || rarity);
+      }
 
       const row = db
         .prepare(`
@@ -447,7 +473,7 @@ export function pickDropTaxon(rarity, rng) {
           WHERE t.id = ?
           LIMIT 1
         `)
-        .get(String(rarity), String(ready.taxon_id));
+        .get(selectedRarity, String(ready.taxon_id));
       return mapRow(row);
     }
 
