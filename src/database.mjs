@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { byId, publicCatalog } from "./catalog.mjs";
 import { DEFAULT_CONFIG, generatePackBlueprint, packsAccrued, cryptoRng } from "./game-engine.mjs";
+import { resolveDefinition, selectImportedDefinition } from "./definitions.mjs";
 
 const dbPath = resolve(process.env.LIFECARDS_DB_PATH ?? "./data/lifecards.sqlite");
 mkdirSync(dirname(dbPath), { recursive: true });
@@ -60,6 +61,11 @@ export function migrate() {
     );
     CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
   `);
+
+  const cardColumns = new Set(db.prepare("PRAGMA table_info(cards)").all().map((row) => row.name));
+  if (!cardColumns.has("definition_json")) {
+    db.exec("ALTER TABLE cards ADD COLUMN definition_json TEXT");
+  }
 }
 
 export function ensureUser(id = "explorer", displayName = "Explorer") {
@@ -126,9 +132,21 @@ function issueDefinition(ownerId, definition, finish) {
   const serial = allocateSerial(definition, edition);
   const id = uuid();
   db.prepare(`INSERT INTO cards
-    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, definition.id, ownerId, edition.key, serial, edition.cap, finish, definition.rarity, definition.kind, nowMs());
+    (id, definition_id, owner_id, edition_key, serial_number, serial_cap, finish, rarity, kind, created_at, definition_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(
+      id,
+      definition.id,
+      ownerId,
+      edition.key,
+      serial,
+      edition.cap,
+      finish,
+      definition.rarity,
+      definition.kind,
+      nowMs(),
+      JSON.stringify(definition)
+    );
   return hydrateCard(db.prepare("SELECT * FROM cards WHERE id = ?").get(id));
 }
 
@@ -140,7 +158,11 @@ function issueLuca(ownerId) {
 
 function hydrateCard(row) {
   if (!row) return null;
-  const definition = byId.get(row.definition_id);
+  let definition = null;
+  if (row.definition_json) {
+    try { definition = JSON.parse(row.definition_json); } catch {}
+  }
+  definition ||= resolveDefinition(row.definition_id);
   return {
     id: row.id,
     ownerId: row.owner_id,
@@ -169,8 +191,16 @@ export function claimPack(userId = "explorer", config = DEFAULT_CONFIG, rng = cr
     db.prepare("UPDATE users SET pack_balance = ?, pack_anchor_at = ? WHERE id = ?")
       .run(nextBalance, anchor, userId);
 
-    const blueprint = generatePackBlueprint({ rng, config });
-    const cards = blueprint.cards.map((slot) => issueDefinition(userId, byId.get(slot.definitionId), slot.finish));
+    const blueprint = generatePackBlueprint({
+      rng,
+      config,
+      definitionSelector: (rarity, rollRng) => selectImportedDefinition(rarity, rollRng),
+    });
+    const cards = blueprint.cards.map((slot) => {
+      const definition = resolveDefinition(slot.definitionId);
+      if (!definition) throw new Error(`Unknown card definition ${slot.definitionId}`);
+      return issueDefinition(userId, definition, slot.finish);
+    });
     const originCard = blueprint.originTriggered ? issueLuca(userId) : null;
     db.exec("COMMIT");
     return { cards, originCard };
@@ -188,7 +218,7 @@ export function listInventory(userId = "explorer") {
 
 export function listMarket() {
   migrate();
-  return db.prepare(`SELECT l.*, c.definition_id, c.edition_key, c.serial_number, c.serial_cap, c.finish, c.rarity, c.kind
+  return db.prepare(`SELECT l.*, c.definition_id, c.edition_key, c.serial_number, c.serial_cap, c.finish, c.rarity, c.kind, c.definition_json
     FROM listings l JOIN cards c ON c.id = l.card_id
     WHERE l.status = 'ACTIVE' ORDER BY l.created_at DESC`).all().map((row) => ({
       id: row.id,
@@ -205,6 +235,7 @@ export function listMarket() {
         finish: row.finish,
         rarity: row.rarity,
         kind: row.kind,
+        definition_json: row.definition_json,
         created_at: row.created_at,
       }),
     }));
