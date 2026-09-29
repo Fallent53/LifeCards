@@ -316,13 +316,13 @@ function renderMarket(){
           ? (fixed
               ? listings.map(listing=>
                   '<article class="market-item">'+cardHtml(listing.card,{compact:true})+
-                  '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div><button data-buy="'+esc(listing.id)+'">Buy</button></div></article>'
+                  '<div class="market-meta"><div><small>ASK</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div>'+(listing.sellerId===ui.state.user.id?'<button class="secondary-market-button" data-cancel-listing="'+esc(listing.id)+'">Cancel</button>':'<button data-buy="'+esc(listing.id)+'">Buy</button>')+'</div></article>'
                 ).join("")
               : auctions.map(auction=>{
                   const current=auction.highestBid==null?auction.startingPrice:auction.highestBid;
                   return '<article class="market-item auction-item">'+cardHtml(auction.card,{compact:true})+
                     '<div class="auction-timer">'+remainingTime(auction.endsAt)+' left</div>'+
-                    '<div class="market-meta"><div><small>'+(auction.highestBid==null?"STARTING BID":"CURRENT BID")+'</small><strong>◆ '+formatNumber(current)+'</strong><span>'+esc(auction.sellerId)+'</span></div><button data-bid="'+esc(auction.id)+'" data-min-bid="'+(current+(auction.highestBid==null?0:1))+'">Bid</button></div></article>';
+                    '<div class="market-meta"><div><small>'+(auction.highestBid==null?"STARTING BID":"CURRENT BID")+'</small><strong>◆ '+formatNumber(current)+'</strong><span>'+esc(auction.sellerId)+'</span></div>'+(auction.sellerId===ui.state.user.id?(auction.highestBid==null?'<button class="secondary-market-button" data-cancel-auction="'+esc(auction.id)+'">Cancel</button>':'<button disabled>Your auction</button>'):'<button data-bid="'+esc(auction.id)+'" data-min-bid="'+(current+(auction.highestBid==null?0:1))+'">Bid</button>')+'</div></article>';
                 }).join(""))
           : '<div class="empty-state">No active '+(fixed?"listings":"auctions")+'.</div>'
       )+'</div>'+
@@ -331,6 +331,8 @@ function renderMarket(){
   document.querySelectorAll("[data-market-mode]").forEach(button=>button.onclick=()=>{ui.marketMode=button.dataset.marketMode;renderMarket();wireCommon()});
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{event.stopPropagation();buy(button.dataset.buy)});
   document.querySelectorAll("[data-bid]").forEach(button=>button.onclick=event=>{event.stopPropagation();bidAuction(button.dataset.bid,Number(button.dataset.minBid))});
+  document.querySelectorAll("[data-cancel-listing]").forEach(button=>button.onclick=event=>{event.stopPropagation();cancelFixedListing(button.dataset.cancelListing)});
+  document.querySelectorAll("[data-cancel-auction]").forEach(button=>button.onclick=event=>{event.stopPropagation();cancelUserAuction(button.dataset.cancelAuction)});
   warmMedia(visible.slice(0,18).map(x=>x.card.definition));
 }
 
@@ -626,6 +628,24 @@ async function listCard(cardId){
   try{
     await api("/api/market/list",{method:"POST",body:JSON.stringify({cardId,price:amount})});
     flash("Listed on market");
+    await refresh();
+  }catch(error){flash(error.message)}
+}
+
+async function cancelFixedListing(listingId){
+  if(!window.confirm("Cancel this fixed-price listing?"))return;
+  try{
+    await api("/api/market/cancel-listing",{method:"POST",body:JSON.stringify({listingId})});
+    flash("Listing cancelled");
+    await refresh();
+  }catch(error){flash(error.message)}
+}
+
+async function cancelUserAuction(auctionId){
+  if(!window.confirm("Cancel this auction? Auctions with bids cannot be cancelled."))return;
+  try{
+    await api("/api/market/cancel-auction",{method:"POST",body:JSON.stringify({auctionId})});
+    flash("Auction cancelled");
     await refresh();
   }catch(error){flash(error.message)}
 }
