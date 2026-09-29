@@ -8,27 +8,28 @@ const curatedByScientificName = new Map(
 );
 
 function rarityForRank(rank) {
-  const value = String(rank || "").toLowerCase();
-  if (value === "species") return "COMMON";
-  if (["genus", "subgenus"].includes(value)) return "UNCOMMON";
-  if (["family", "subfamily", "superfamily", "tribe", "subtribe"].includes(value)) return "RARE";
-  if (["order", "suborder", "superorder", "infraorder"].includes(value)) return "SUPER_RARE";
-  if (["class", "subclass", "superclass"].includes(value)) return "ULTRA_RARE";
-  if (["phylum", "subphylum", "superphylum"].includes(value)) return "LEGENDARY";
-  if (["kingdom", "domain"].includes(value)) return "MYTHIC";
-  return "COMMON";
+  const value = String(rank || "").toLowerCase().trim();
+  if (["species","subspecies","variety","subvariety","form","subform","strain","pathovar","cultivar"].includes(value)) return "COMMON";
+  if (["genus","subgenus","section","subsection","series","subseries","species group","species subgroup"].includes(value)) return "UNCOMMON";
+  if (["family","subfamily","superfamily","tribe","subtribe","supertribe"].includes(value)) return "RARE";
+  if (["order","suborder","superorder","infraorder","parvorder"].includes(value)) return "SUPER_RARE";
+  if (["class","subclass","superclass","infraclass","parvclass"].includes(value)) return "ULTRA_RARE";
+  if (["phylum","subphylum","superphylum","division","subdivision","superdivision"].includes(value)) return "LEGENDARY";
+  if (["kingdom","subkingdom","superkingdom","domain","empire"].includes(value)) return "MYTHIC";
+  return "UNCOMMON";
 }
 
 function taxonEditionCap(rank) {
-  const value = String(rank || "").toLowerCase();
-  if (["genus", "subgenus"].includes(value)) return 100000;
-  if (["family", "subfamily", "superfamily", "tribe", "subtribe"].includes(value)) return 50000;
-  if (["order", "suborder", "superorder", "infraorder"].includes(value)) return 25000;
-  if (["class", "subclass", "superclass"].includes(value)) return 10000;
-  if (["phylum", "subphylum", "superphylum"].includes(value)) return 5000;
-  if (value === "kingdom") return 1000;
-  if (value === "domain") return 250;
-  return 0;
+  const value = String(rank || "").toLowerCase().trim();
+  if (["species","subspecies","variety","subvariety","form","subform","strain","pathovar","cultivar"].includes(value)) return 0;
+  if (["genus","subgenus","section","subsection","series","subseries","species group","species subgroup"].includes(value)) return 100000;
+  if (["family","subfamily","superfamily","tribe","subtribe","supertribe"].includes(value)) return 50000;
+  if (["order","suborder","superorder","infraorder","parvorder"].includes(value)) return 25000;
+  if (["class","subclass","superclass","infraclass","parvclass"].includes(value)) return 10000;
+  if (["phylum","subphylum","superphylum","division","subdivision","superdivision"].includes(value)) return 5000;
+  if (["kingdom","subkingdom","superkingdom"].includes(value)) return 1000;
+  if (["domain","empire"].includes(value)) return 250;
+  return 75000;
 }
 
 function iconForRank(rank, kind) {
