@@ -47,3 +47,12 @@ test("getTaxon exposes stable card-like taxonomy metadata", () => {
   assert.equal(taxon.kind, "taxon");
   assert.ok(Number.isInteger(taxon.childCount));
 });
+
+
+test("seed taxonomy exposes descendant species counts for radial weighting", () => {
+  const mammalia = getTaxon("mammalia");
+  assert.ok(mammalia.descendantSpeciesCount >= 1);
+
+  const lion = getTaxon("panthera-leo");
+  assert.equal(lion.descendantSpeciesCount, 1);
+});
