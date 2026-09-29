@@ -4,7 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies, ownedScientificNames } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
-import { getKnowledge } from "./src/knowledge.mjs";
+import { getKnowledge, getKnowledgeBatch } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
 import { remoteSearchTaxa, remoteGetTaxon, remoteGetChildren, remoteGetPath, remoteGetSubtree, remoteStatusHint } from "./src/checklistbank.mjs";
 
@@ -164,6 +164,13 @@ async function api(request, response, url) {
       const lang = (url.searchParams.get("lang") || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
       const knowledge = await getKnowledge(query, { lang });
       return publicJson(response, { knowledge }, 86400);
+    }
+    if (request.method === "POST" && url.pathname === "/api/knowledge/batch") {
+      const input = await bodyJson(request);
+      const lang = String(input.lang || "en").replace(/[^a-z-]/gi, "").slice(0, 12) || "en";
+      const entries = Array.isArray(input.entries) ? input.entries.slice(0, 24) : [];
+      const knowledge = await getKnowledgeBatch(entries, { lang, concurrency: 4 });
+      return json(response, 200, { knowledge });
     }
     if (request.method === "GET" && url.pathname === "/api/taxonomy/status") {
       return json(response, 200, { taxonomy: effectiveTaxonomyStatus() });
