@@ -258,3 +258,14 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .stack-copy-row:hover{border-color:#42634f}.stack-copy-row b{display:block;font-size:9px}.stack-copy-row small{display:block;color:#708679;font-size:7px}.stack-copy-row>span{font-size:7px;color:#84998d}.stack-copy-row button{border:1px solid #31513f;background:#102218;border-radius:7px;padding:6px 8px;font-size:7px}.finish-dot{width:7px;height:7px;border-radius:50%;background:#5f7969}.finish-dot.holo{background:#d6bbff;box-shadow:0 0 8px #b596e8}
 @media(max-width:980px){.collection-hero{align-items:flex-start;flex-direction:column}.collection-stats{width:100%}.collection-subbar{align-items:flex-start;flex-direction:column}.stack-detail{grid-template-columns:1fr}.stack-detail-card{width:280px;max-width:100%;margin:auto}}
 @media(max-width:620px){.collection-stats{grid-template-columns:repeat(2,1fr)}.collection-grid,.collection-grid.discovery-grid,.collection-grid.all-cards-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:15px 8px}.collection-stack{padding:5px 2px 31px}.stack-summary{grid-template-columns:repeat(2,1fr)}}
+
+.collection-pagination{display:flex;align-items:center;justify-content:center;gap:12px;margin:34px 0 10px}
+.collection-pagination button{border:1px solid var(--line);background:#0b1812;border-radius:10px;padding:9px 13px;color:#a2b6a9;font-size:9px}
+.collection-pagination button:hover:not(:disabled){border-color:#47715a;color:#effff4}
+.collection-pagination button:disabled{opacity:.28;cursor:default}
+.collection-pagination span{min-width:96px;text-align:center;color:#758b7d;font-size:8px}
+.collection-grid.is-loading{opacity:.62;transition:opacity .15s}
+.collection-card-skeleton{aspect-ratio:5/7.15;border:1px solid #1f372a;border-radius:20px;background:linear-gradient(110deg,#0e1e16 25%,#173025 38%,#0e1e16 52%);background-size:260% 100%;animation:artShimmer 1.3s linear infinite}
+.stack-copies-loading{display:grid;place-items:center;align-content:center;gap:12px;min-height:240px;color:#81968a}
+.stack-copies-loading span{width:30px;height:30px;border:2px solid #254333;border-top-color:#66dc98;border-radius:50%;animation:spin 1s linear infinite}
+.stack-copies-loading b{font-size:9px;letter-spacing:.08em;text-transform:uppercase}
