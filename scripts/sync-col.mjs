@@ -1,5 +1,5 @@
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, rm, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { resolve, dirname } from "node:path";
@@ -120,10 +120,94 @@ function boolExtinct(value) {
   return /^(1|true|yes|extinct)$/i.test(String(value || "").trim()) ? 1 : 0;
 }
 
-await downloadArchive();
-await rm(outputPath, { force: true });
+function normalizedArchivePath(value="") {
+  return String(value).replaceAll("\\","/").replace(/^\.\//,"").replace(/^\/+|\/+$/g,"");
+}
 
-const db = new DatabaseSync(outputPath);
+function decodeXmlText(value="") {
+  return String(value)
+    .replace(/&amp;/g,"&")
+    .replace(/&lt;/g,"<")
+    .replace(/&gt;/g,">")
+    .replace(/&quot;/g,'"')
+    .replace(/&#39;/g,"'");
+}
+
+async function findDwcaTaxonCore(directory) {
+  const files=directory.files.filter((entry)=>entry.type!=="Directory");
+  const byPath=new Map(files.map((entry)=>[normalizedArchivePath(entry.path).toLowerCase(),entry]));
+
+  const metaEntry=files.find((entry)=>(/(^|\/)meta\.xml$/i).test(normalizedArchivePath(entry.path)));
+  if(metaEntry){
+    try{
+      const xml=(await metaEntry.buffer()).toString("utf8");
+      const coreBlocks=[...xml.matchAll(/<core\b[^>]*>[\s\S]*?<\/core>/gi)].map(match=>match[0]);
+      const taxonCore=coreBlocks.find((block)=>/rowType\s*=\s*["'][^"']*(?:Taxon|taxon)[^"']*["']/i.test(block))||coreBlocks[0]||"";
+      const locationMatch=taxonCore.match(/<location>([\s\S]*?)<\/location>/i);
+      if(locationMatch){
+        const location=normalizedArchivePath(decodeXmlText(locationMatch[1].trim()));
+        const exact=byPath.get(location.toLowerCase());
+        if(exact)return {entry:exact,source:"meta.xml"};
+
+        const basename=location.split("/").at(-1)?.toLowerCase();
+        const byBasename=files.find((entry)=>normalizedArchivePath(entry.path).split("/").at(-1)?.toLowerCase()===basename);
+        if(byBasename)return {entry:byBasename,source:"meta.xml basename"};
+      }
+    }catch(error){
+      console.warn(`Could not parse DwCA meta.xml: ${error.message}`);
+    }
+  }
+
+  const preferredPatterns=[
+    /(^|\/)taxa\.txt$/i,
+    /(^|\/)taxon\.txt$/i,
+    /(^|\/)taxa\.tsv$/i,
+    /(^|\/)taxon\.tsv$/i,
+    /(^|\/)taxa\.csv$/i,
+    /(^|\/)taxon\.csv$/i,
+  ];
+  for(const pattern of preferredPatterns){
+    const match=files.find((entry)=>pattern.test(normalizedArchivePath(entry.path)));
+    if(match)return {entry:match,source:"filename"};
+  }
+
+  const heuristic=files.find((entry)=>{
+    const base=normalizedArchivePath(entry.path).split("/").at(-1)||"";
+    return /^tax(?:on|a)[^/]*\.(?:txt|tsv|csv)$/i.test(base);
+  });
+  if(heuristic)return {entry:heuristic,source:"heuristic"};
+
+  return null;
+}
+
+function delimiterForEntry(entry) {
+  return /\.csv$/i.test(String(entry?.path||"")) ? "," : "\t";
+}
+
+await downloadArchive();
+
+const directory = await unzipper.Open.file(archivePath);
+const core = await findDwcaTaxonCore(directory);
+if(!core){
+  const sample=directory.files
+    .filter((entry)=>entry.type!=="Directory")
+    .slice(0,30)
+    .map((entry)=>normalizedArchivePath(entry.path))
+    .join(", ");
+  throw new Error(
+    "DwCA archive does not expose a recognizable Taxon core. " +
+    `First archive entries: ${sample||"(none)"}`
+  );
+}
+const taxonEntry=core.entry;
+console.log(`DwCA taxon core: ${taxonEntry.path} (${core.source})`);
+
+const buildPath=`${outputPath}.building`;
+await rm(buildPath,{force:true});
+await rm(`${buildPath}-wal`,{force:true});
+await rm(`${buildPath}-shm`,{force:true});
+
+const db = new DatabaseSync(buildPath);
 db.exec(`
   PRAGMA journal_mode=WAL;
   PRAGMA synchronous=OFF;
@@ -166,13 +250,9 @@ let headerChecked = false;
 
 db.exec("BEGIN");
 try {
-  const directory = await unzipper.Open.file(archivePath);
-  const taxonEntry = directory.files.find((entry) => /(^|\/)taxon\.txt$/i.test(entry.path));
-  if (!taxonEntry) throw new Error("DwCA archive does not contain taxon.txt");
-
   const parser = taxonEntry.stream().pipe(parse({
     columns: true,
-    delimiter: "\t",
+    delimiter: delimiterForEntry(taxonEntry),
     relax_column_count: true,
     relax_quotes: true,
     bom: true,
@@ -188,7 +268,7 @@ try {
       const scientific = pick(row, "scientificname", "canonicalname");
       const id = pick(row, "taxonid", "nameusageid", "id");
       if (!scientific || !id) {
-        throw new Error("Unsupported DwCA taxon.txt header: scientificName/taxonID were not found.");
+        throw new Error(`Unsupported DwCA taxon core header in ${taxonEntry.path}: scientificName/taxonID were not found.`);
       }
     }
 
@@ -223,13 +303,15 @@ try {
 } catch (error) {
   try { db.exec("ROLLBACK"); } catch {}
   db.close();
+  await rm(buildPath,{force:true}).catch(()=>{});
+  await rm(`${buildPath}-wal`,{force:true}).catch(()=>{});
+  await rm(`${buildPath}-shm`,{force:true}).catch(()=>{});
   throw error;
 }
 
 console.log("Importing vernacular names when available…");
 try {
-  const directory = await unzipper.Open.file(archivePath);
-  const vernacularEntry = directory.files.find((entry) => /(^|\/)(vernacular(name)?|commonname).*\.txt$/i.test(entry.path));
+  const vernacularEntry = directory.files.find((entry) => /(^|\/)(vernacular(name)?|commonname).*\.(?:txt|tsv|csv)$/i.test(normalizedArchivePath(entry.path)));
   if (vernacularEntry) {
     const updateCommon = db.prepare(`
       UPDATE taxa
@@ -240,7 +322,7 @@ try {
     db.exec("BEGIN");
     const parser = vernacularEntry.stream().pipe(parse({
       columns: true,
-      delimiter: "\t",
+      delimiter: delimiterForEntry(vernacularEntry),
       relax_column_count: true,
       relax_quotes: true,
       bom: true,
@@ -389,8 +471,13 @@ for (const [key, value] of Object.entries({
   map_only: mapOnly ? "1" : "0",
 })) setMeta.run(key, value);
 
-db.exec("PRAGMA optimize;");
+db.exec("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;");
 db.close();
+
+await rm(outputPath,{force:true});
+await rm(`${outputPath}-wal`,{force:true}).catch(()=>{});
+await rm(`${outputPath}-shm`,{force:true}).catch(()=>{});
+await rename(buildPath,outputPath);
 
 if (!keepArchive) await rm(archivePath, { force: true });
 
