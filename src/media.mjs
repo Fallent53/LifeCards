@@ -35,23 +35,58 @@ function mediaFromPage(page, sourceLabel = "Wikimedia Commons") {
   };
 }
 
+async function fetchJsonWithRetry(url, label, timeoutMs = 8000) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { "User-Agent": "LifeCards/0.1 (licensed media resolver)" },
+      });
+      if (response.ok) return response.json();
+      lastError = new Error(`${label} returned ${response.status}`);
+      if (![429, 500, 502, 503, 504].includes(response.status)) throw lastError;
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < 2) {
+      await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+    }
+  }
+  throw lastError || new Error(`${label} request failed`);
+}
+
 async function commonsQuery(params) {
-  const response = await fetch(`https://commons.wikimedia.org/w/api.php?${params}`, {
-    signal: AbortSignal.timeout(3500),
-    headers: { "User-Agent": "LifeCards/0.1 (licensed media resolver)" },
-  });
-  if (!response.ok) throw new Error(`Wikimedia Commons returned ${response.status}`);
-  return response.json();
+  return fetchJsonWithRetry(
+    `https://commons.wikimedia.org/w/api.php?${params}`,
+    "Wikimedia Commons"
+  );
 }
 
 async function wikipediaFileQuery(lang, params) {
   const safeLang=String(lang||"en").replace(/[^a-z-]/gi,"").slice(0,12)||"en";
-  const response=await fetch(`https://${safeLang}.wikipedia.org/w/api.php?${params}`,{
-    signal:AbortSignal.timeout(3500),
-    headers:{"User-Agent":"LifeCards/0.1 (licensed Wikipedia media resolver)"},
-  });
-  if(!response.ok)throw new Error(`Wikipedia returned ${response.status}`);
-  return response.json();
+  return fetchJsonWithRetry(
+    `https://${safeLang}.wikipedia.org/w/api.php?${params}`,
+    `Wikipedia (${safeLang})`
+  );
+}
+
+export function wikipediaThumbnailFallback(page, lang = "en") {
+  const imageUrl = page?.original?.source || page?.thumbnail?.source || null;
+  if (!imageUrl) return null;
+
+  return {
+    imageUrl,
+    originalUrl: page?.fullurl || imageUrl,
+    title: page?.pageimage ? `File:${page.pageimage}` : page?.title || "Wikipedia image",
+    creator: null,
+    license: "Free image selected by Wikipedia PageImages",
+    licenseUrl: page?.fullurl || null,
+    attribution: "Attribution pending file metadata resolution",
+    source: `Wikipedia (${lang})`,
+    metadataPending: true,
+  };
 }
 
 export async function getWikipediaFileMetadata(fileName, lang = "en") {
