@@ -8,6 +8,8 @@ const ui={
   knowledge:new Map(),
   knowledgeLoading:new Set(),
   collectionFilter:"ALL",
+  collectionMode:"DISCOVERIES",
+  collectionSort:"RARITY",
   marketFilter:"ALL",
   query:"",
   codexQuery:"",
@@ -285,6 +287,65 @@ function definitionPreview(definition){
   return cardHtml({...definition,definition,finish:"STANDARD"},{compact:true,interactive:false});
 }
 
+const RARITY_ORDER={UNKNOWN:0,MYTHIC:1,LEGENDARY:2,ULTRA_RARE:3,SUPER_RARE:4,RARE:5,UNCOMMON:6,COMMON:7};
+
+function representativeCard(cards){
+  return [...cards].sort((a,b)=>{
+    const finish=(b.finish==="HOLO")-(a.finish==="HOLO");
+    if(finish)return finish;
+    const wild=(b.edition==="WILD CENSUS I")-(a.edition==="WILD CENSUS I");
+    if(wild)return wild;
+    const foundation=(b.edition==="FOUNDATION I")-(a.edition==="FOUNDATION I");
+    if(foundation)return foundation;
+    return Number(a.serial||Infinity)-Number(b.serial||Infinity);
+  })[0];
+}
+
+function groupCollection(cards){
+  const groups=new Map();
+  for(const card of cards){
+    const key=card.definitionId;
+    if(!groups.has(key))groups.set(key,[]);
+    groups.get(key).push(card);
+  }
+  return [...groups.entries()].map(([definitionId,copies])=>({
+    definitionId,
+    copies,
+    card:representativeCard(copies),
+    holoCount:copies.filter(c=>c.finish==="HOLO").length,
+    wildCount:copies.filter(c=>c.edition==="WILD CENSUS I").length,
+    lowestSerial:Math.min(...copies.map(c=>Number(c.serial||Infinity))),
+    newest:Math.max(...copies.map(c=>Number(c.createdAt||0))),
+  }));
+}
+
+function sortCollectionGroups(groups){
+  const sorted=[...groups];
+  if(ui.collectionSort==="NAME"){
+    return sorted.sort((a,b)=>a.card.definition.commonName.localeCompare(b.card.definition.commonName));
+  }
+  if(ui.collectionSort==="NEWEST"){
+    return sorted.sort((a,b)=>b.newest-a.newest);
+  }
+  return sorted.sort((a,b)=>{
+    const rarity=(RARITY_ORDER[a.card.definition.rarity]??99)-(RARITY_ORDER[b.card.definition.rarity]??99);
+    if(rarity)return rarity;
+    return a.card.definition.commonName.localeCompare(b.card.definition.commonName);
+  });
+}
+
+function collectionStackHtml(group){
+  const card=group.card;
+  return '<article class="collection-stack" data-stack="'+esc(group.definitionId)+'">'+
+    '<div class="stack-layers"><i></i><i></i>'+cardHtml(card,{compact:true})+'</div>'+
+    '<div class="stack-badges">'+
+      '<span class="copy-count">×'+group.copies.length+'</span>'+
+      (group.holoCount?'<span class="stack-holo">✦ '+group.holoCount+' Holo</span>':"")+
+      (group.wildCount?'<span class="stack-wild">'+group.wildCount+' Wild</span>':"")+
+    '</div>'+
+  '</article>';
+}
+
 function flash(message){
   toast.textContent=message;
   toast.classList.add("show");
@@ -364,7 +425,7 @@ function renderPacks(){
 function renderCollection(){
   const inventory=ui.state.inventory;
   const q=ui.query.trim().toLowerCase();
-  let filtered=inventory.filter(card=>{
+  const filtered=inventory.filter(card=>{
     const d=card.definition;
     const queryOk=!q||[d.commonName,d.scientificName,d.rarity,card.edition].some(v=>String(v||"").toLowerCase().includes(q));
     if(!queryOk)return false;
@@ -375,21 +436,116 @@ function renderCollection(){
     if(ui.collectionFilter==="SPECIES")return card.kind==="species";
     return true;
   });
+
+  const uniqueCount=new Set(inventory.map(c=>c.definitionId)).size;
+  const holoCount=inventory.filter(c=>c.finish==="HOLO").length;
+  const wildCount=inventory.filter(c=>c.edition==="WILD CENSUS I").length;
   const filters=["ALL","SPECIES","TAXA","WILD","HOLO"];
+  const groups=sortCollectionGroups(groupCollection(filtered));
+  const displayItems=ui.collectionMode==="DISCOVERIES"
+    ? groups.map(collectionStackHtml).join("")
+    : filtered.map(c=>cardHtml(c,{compact:true,showSell:true})).join("");
+
   main.innerHTML=
     '<section class="library-page">'+
-      '<div class="page-hero compact-hero"><span class="eyebrow">YOUR ARCHIVE</span><h1>Collection</h1><p>'+inventory.length+' cards · '+new Set(inventory.map(c=>c.definitionId)).size+' unique discoveries</p></div>'+
-      '<div class="collection-toolbar">'+
-        '<label class="search-box"><span>⌕</span><input id="collectionSearch" placeholder="Search species, taxa, edition..." value="'+esc(ui.query)+'"></label>'+
-        '<div class="filter-row">'+filters.map(f=>'<button data-filter="'+f+'" class="'+(ui.collectionFilter===f?"active":"")+'">'+f+'</button>').join("")+'</div>'+
+      '<div class="collection-hero">'+
+        '<div><span class="eyebrow">YOUR ARCHIVE</span><h1>Collection</h1><p>Your biological archive, organized as discoveries instead of duplicate clutter.</p></div>'+
+        '<div class="collection-stats">'+
+          '<div><b>'+formatNumber(uniqueCount)+'</b><small>Discoveries</small></div>'+
+          '<div><b>'+formatNumber(inventory.length)+'</b><small>Total cards</small></div>'+
+          '<div><b>'+formatNumber(holoCount)+'</b><small>Holo</small></div>'+
+          '<div><b>'+formatNumber(wildCount)+'</b><small>Wild</small></div>'+
+        '</div>'+
       '</div>'+
-      '<div class="card-grid collection-grid">'+(filtered.length?filtered.map(c=>cardHtml(c,{compact:true,showSell:true})).join(""):'<div class="empty-state">No cards match this filter.</div>')+'</div>'+
+      '<div class="collection-toolbar album-toolbar">'+
+        '<label class="search-box"><span>⌕</span><input id="collectionSearch" placeholder="Search species, taxa, edition..." value="'+esc(ui.query)+'"></label>'+
+        '<div class="collection-mode">'+
+          '<button data-collection-mode="DISCOVERIES" class="'+(ui.collectionMode==="DISCOVERIES"?"active":"")+'">Discoveries</button>'+
+          '<button data-collection-mode="CARDS" class="'+(ui.collectionMode==="CARDS"?"active":"")+'">All cards</button>'+
+        '</div>'+
+      '</div>'+
+      '<div class="collection-subbar">'+
+        '<div class="filter-row">'+filters.map(f=>'<button data-filter="'+f+'" class="'+(ui.collectionFilter===f?"active":"")+'">'+f+'</button>').join("")+'</div>'+
+        '<div class="collection-sort"><span>Sort</span><button data-sort="RARITY" class="'+(ui.collectionSort==="RARITY"?"active":"")+'">Rarity</button><button data-sort="NAME" class="'+(ui.collectionSort==="NAME"?"active":"")+'">Name</button><button data-sort="NEWEST" class="'+(ui.collectionSort==="NEWEST"?"active":"")+'">Newest</button></div>'+
+      '</div>'+
+      '<div class="collection-result-line"><span>'+(ui.collectionMode==="DISCOVERIES"?groups.length:filtered.length)+' shown</span><small>'+formatNumber(uniqueCount)+' unique taxa/species owned</small></div>'+
+      '<div class="card-grid collection-grid '+(ui.collectionMode==="DISCOVERIES"?"discovery-grid":"all-cards-grid")+'">'+
+        (displayItems||'<div class="empty-state">No cards match this filter.</div>')+
+      '</div>'+
     '</section>';
+
   const search=document.getElementById("collectionSearch");
-  search?.addEventListener("input",event=>{ui.query=event.target.value;renderCollection();wireCommon()});
-  document.querySelectorAll("[data-filter]").forEach(button=>button.onclick=()=>{ui.collectionFilter=button.dataset.filter;renderCollection();wireCommon()});
-  document.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{event.stopPropagation();listCard(button.dataset.sell)});
-  warmMedia(filtered.map(c=>c.definition));
+  search?.addEventListener("input",event=>{
+    ui.query=event.target.value;
+    renderCollection();
+    wireCommon();
+    document.getElementById("collectionSearch")?.focus();
+  });
+
+  document.querySelectorAll("[data-filter]").forEach(button=>button.onclick=()=>{
+    ui.collectionFilter=button.dataset.filter;
+    renderCollection();
+    wireCommon();
+  });
+
+  document.querySelectorAll("[data-collection-mode]").forEach(button=>button.onclick=()=>{
+    ui.collectionMode=button.dataset.collectionMode;
+    renderCollection();
+    wireCommon();
+  });
+
+  document.querySelectorAll("[data-sort]").forEach(button=>button.onclick=()=>{
+    ui.collectionSort=button.dataset.sort;
+    renderCollection();
+    wireCommon();
+  });
+
+  document.querySelectorAll("[data-stack]").forEach(stack=>stack.onclick=()=>{
+    const group=groups.find(item=>item.definitionId===stack.dataset.stack);
+    if(group)openCollectionStack(group);
+  });
+
+  document.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    listCard(button.dataset.sell);
+  });
+
+  const mediaDefinitions=ui.collectionMode==="DISCOVERIES"
+    ? groups.map(group=>group.card.definition)
+    : filtered.map(card=>card.definition);
+  warmMedia(mediaDefinitions);
+}
+
+function openCollectionStack(group){
+  const d=group.card.definition;
+  cardModalContent.innerHTML=
+    '<div class="stack-detail">'+
+      '<div class="stack-detail-card">'+cardHtml(group.card,{interactive:false})+'</div>'+
+      '<div class="stack-detail-copy">'+
+        '<span class="eyebrow">OWNED DISCOVERY</span><h2>'+esc(d.commonName)+'</h2><em>'+esc(d.scientificName)+'</em>'+
+        '<div class="stack-summary">'+
+          '<div><b>'+group.copies.length+'</b><small>copies</small></div>'+
+          '<div><b>'+group.holoCount+'</b><small>holo</small></div>'+
+          '<div><b>'+group.wildCount+'</b><small>wild</small></div>'+
+          '<div><b>#'+(Number.isFinite(group.lowestSerial)?String(group.lowestSerial).padStart(6,"0"):"—")+'</b><small>best serial</small></div>'+
+        '</div>'+
+        '<h3>Your copies</h3>'+
+        '<div class="stack-copy-list">'+group.copies.map(card=>
+          '<div class="stack-copy-row" data-stack-card="'+esc(card.id)+'"><span class="finish-dot '+(card.finish==="HOLO"?"holo":"")+'"></span><div><b>'+esc(card.edition)+'</b><small>'+esc(serial(card))+'</small></div><span>'+esc(card.finish)+'</span><button data-sell="'+esc(card.id)+'">List</button></div>'
+        ).join("")+'</div>'+
+      '</div>'+
+    '</div>';
+  cardModal.showModal();
+  cardModalContent.querySelectorAll("[data-stack-card]").forEach(row=>row.onclick=event=>{
+    if(event.target.closest("[data-sell]"))return;
+    const card=group.copies.find(item=>item.id===row.dataset.stackCard);
+    if(card)openCardModal(card.definition,card);
+  });
+  cardModalContent.querySelectorAll("[data-sell]").forEach(button=>button.onclick=event=>{
+    event.stopPropagation();
+    listCard(button.dataset.sell);
+  });
+  loadKnowledge(d).then(()=>{}).catch(()=>{});
 }
 
 function renderMarket(){
