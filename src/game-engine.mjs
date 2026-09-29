@@ -74,9 +74,19 @@ export function generatePackBlueprint({ rng = cryptoRng(), config = DEFAULT_CONF
   const cards = [];
   for (let i = 0; i < config.cardsPerPack; i += 1) {
     const rarity = rollRarity(rng);
-    const external = definitionSelector ? definitionSelector(rarity, rng) : null;
-    const definition = external || selectDefinition(rarity, rng, definitions ?? getDroppableDefinitions());
-    if (!definition) throw new Error(`No card definition available for rarity ${rarity}`);
+
+    let definition = null;
+    if (definitionSelector) {
+      // A real gameplay taxonomy is authoritative. Never silently fall back to
+      // the seed/demo catalogue: that can inject out-of-scope taxa.
+      for (let attempt = 0; attempt < 3 && !definition; attempt += 1) {
+        definition = definitionSelector(rarity, rng);
+      }
+    } else {
+      definition = selectDefinition(rarity, rng, definitions ?? getDroppableDefinitions());
+    }
+
+    if (!definition) throw new Error(`No in-scope card definition available for rarity ${rarity}`);
     cards.push({ definitionId: definition.id, finish: rollFinish(rng, config.holoRate) });
   }
   return {
