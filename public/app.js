@@ -8,6 +8,8 @@ const ui={
   collectionFilter:"ALL",
   marketFilter:"ALL",
   query:"",
+  codexQuery:"",
+  treeQuery:"",
   favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
   revealIndex:0,
@@ -358,27 +360,38 @@ function treeBranch(id,nodes,owned){
 function renderTree(){
   const nodes=ui.state.catalog.filter(d=>d.kind!=="origin");
   const owned=new Set(ui.state.inventory.map(c=>c.definitionId));
+  const q=ui.treeQuery.trim().toLowerCase();
+  const matches=q?ui.state.catalog.filter(d=>[d.commonName,d.scientificName,d.rank,d.kind].some(v=>String(v||"").toLowerCase().includes(q))).slice(0,8):[];
   main.innerHTML=
     '<section class="tree-page">'+
       '<div class="page-hero compact-hero"><span class="eyebrow">PHYLOGENETIC ALBUM</span><h1>Tree of Life</h1><p>Collect the organisms and the branches connecting them. The deeper the node, the more foundational — and generally rarer — its card.</p></div>'+
+      '<div class="tree-search-wrap"><label class="search-box"><span>⌕</span><input id="treeSearch" placeholder="Find a species, family, clade..." value="'+esc(ui.treeQuery)+'"></label>'+
+        (q?'<div class="tree-search-results">'+(matches.length?matches.map(d=>'<button data-definition="'+esc(d.id)+'"><span>'+esc(d.icon||"◌")+'</span><div><b>'+esc(d.commonName)+'</b><small>'+esc(d.scientificName)+' · '+esc(d.rarity)+'</small></div></button>').join(""):'<span>No match</span>')+'</div>':"")+
+      '</div>'+
       '<div class="tree-legend"><span><i class="legend-dot owned"></i>Owned taxon</span><span><i class="legend-dot"></i>Known node</span><span class="legend-origin">UNKNOWN = unique origin</span></div>'+
       '<div class="tree-canvas">'+
-        '<div class="luca-node"><span>✺</span><div><small>UNKNOWN</small><b>LUCA</b><em>#1 / 1</em></div></div>'+
+        '<div class="luca-node" data-definition="luca"><span>✺</span><div><small>UNKNOWN</small><b>LUCA</b><em>#1 / 1</em></div></div>'+
         '<div class="root-line"></div>'+
         '<div class="tree-roots">'+["bacteria","archaea","eukaryota"].map(id=>treeBranch(id,nodes,owned)).join("")+'</div>'+
       '</div>'+
     '</section>';
+  const treeSearch=document.getElementById("treeSearch");
+  treeSearch?.addEventListener("input",event=>{ui.treeQuery=event.target.value;renderTree();wireCommon();document.getElementById("treeSearch")?.focus()});
 }
 
 function renderCodex(){
-  const catalog=ui.state.catalog;
+  const q=ui.codexQuery.trim().toLowerCase();
+  const catalog=ui.state.catalog.filter(d=>!q||[d.commonName,d.scientificName,d.kind,d.rank,d.rarity].some(v=>String(v||"").toLowerCase().includes(q)));
   main.innerHTML=
     '<section class="codex-page">'+
       '<div class="page-hero compact-hero"><span class="eyebrow">LIVING ENCYCLOPEDIA</span><h1>Codex</h1><p>Every collectible points back to the scientific record. Gameplay rarity and biological conservation are deliberately separate.</p></div>'+
+      '<div class="collection-toolbar"><label class="search-box"><span>⌕</span><input id="codexSearch" placeholder="Search scientific or common names..." value="'+esc(ui.codexQuery)+'"></label><span class="result-count">'+catalog.length+' entries</span></div>'+
       '<div class="codex-grid">'+catalog.map(d=>
-        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rarity)+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(d.summary||"")+'</p></div><span class="codex-arrow">→</span></article>'
+        '<article class="codex-row" data-definition="'+esc(d.id)+'"><div class="codex-thumb">'+imageMarkup(d)+'</div><div class="codex-copy"><span class="codex-type">'+esc(d.kind)+' · '+esc(d.rarity)+'</span><h3>'+esc(d.commonName)+'</h3><em>'+esc(d.scientificName)+'</em><p>'+esc(cardSummary(d))+'</p></div><span class="codex-arrow">→</span></article>'
       ).join("")+'</div>'+
     '</section>';
+  const codexSearch=document.getElementById("codexSearch");
+  codexSearch?.addEventListener("input",event=>{ui.codexQuery=event.target.value;renderCodex();wireCommon();document.getElementById("codexSearch")?.focus()});
   document.querySelectorAll("[data-definition]").forEach(row=>row.onclick=()=>openDefinition(row.dataset.definition));
   warmMedia(catalog.filter(d=>d.kind!=="origin").slice(0,24));
 }
