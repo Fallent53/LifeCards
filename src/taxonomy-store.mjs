@@ -12,6 +12,7 @@ const mapTaxonomyPath = resolve(
 const cardQualityPath = resolve(
   process.env.LIFECARDS_CARD_QUALITY_DB ?? "./data/card-quality.sqlite"
 );
+const CURRENT_MEDIA_RESOLVER = "v15-exact-natural-media";
 
 const openDatabases = new Map();
 
@@ -107,7 +108,7 @@ function cardQualityStatus() {
   const expectedScope = gameplayDb ? String(metaValue(gameplayDb, "scope") || "") : "";
   const auditedScope = String(metaValue(db, "taxonomy_scope") || "");
   const resolverVersion = String(metaValue(db, "resolver_version") || "");
-  const expectedResolver = "v14-real-genus-representatives";
+  const expectedResolver = CURRENT_MEDIA_RESOLVER;
   const compatible =
     Boolean(expectedScope) &&
     auditedScope.toLowerCase() === expectedScope.toLowerCase() &&
@@ -177,6 +178,61 @@ function cardQualityStatus() {
     auditedScope,
     databasePath: cardQualityPath,
   };
+}
+
+export function getAuditedMedia(taxonId, scientificName = "") {
+  const db=openQualityDb();
+  if(!db)return null;
+
+  const auditedScope=String(metaValue(db,"taxonomy_scope")||"");
+  const gameplayDb=openGameplayDb();
+  const expectedScope=gameplayDb?String(metaValue(gameplayDb,"scope")||""):"";
+  const resolverVersion=String(metaValue(db,"resolver_version")||"");
+
+  if(
+    !expectedScope ||
+    auditedScope.toLowerCase()!==expectedScope.toLowerCase() ||
+    resolverVersion!==CURRENT_MEDIA_RESOLVER
+  )return null;
+
+  try{
+    const row=db.prepare(`
+      SELECT
+        taxon_id,scientific_name,status,media_url,media_source,media_resolver,
+        media_confidence,media_creator,media_license,wikipedia_url
+      FROM card_quality
+      WHERE resolver_version=?
+        AND status='READY'
+        AND media_url IS NOT NULL
+        AND trim(media_url)<>''
+        AND (
+          taxon_id=?
+          OR scientific_name=? COLLATE NOCASE
+        )
+      ORDER BY CASE WHEN taxon_id=? THEN 0 ELSE 1 END
+      LIMIT 1
+    `).get(
+      CURRENT_MEDIA_RESOLVER,
+      String(taxonId||""),
+      String(scientificName||""),
+      String(taxonId||"")
+    );
+    if(!row)return null;
+
+    return {
+      imageUrl:row.media_url,
+      originalUrl:row.wikipedia_url||row.media_url,
+      source:row.media_source||"LifeCards audited media",
+      resolver:row.media_resolver||CURRENT_MEDIA_RESOLVER,
+      confidence:row.media_confidence||null,
+      creator:row.media_creator||null,
+      license:row.media_license||null,
+      audited:true,
+      taxonId:String(row.taxon_id),
+    };
+  }catch{
+    return null;
+  }
 }
 
 function metaValue(db, key) {
