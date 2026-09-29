@@ -109,3 +109,24 @@ test("edition supply is fetched per definition instead of through global state",
   assert.ok(supplies.length >= 1);
   assert.ok(supplies.every((entry) => entry.definitionId === definitionId));
 });
+
+
+test("cancelled cards can be relisted without losing listing history", () => {
+  database.resetForTests();
+  database.ensureUser("relist-user", "Relist User");
+  database.db.prepare("UPDATE users SET pack_balance = 1 WHERE id = ?").run("relist-user");
+  database.claimPack("relist-user", config(), deterministicRng());
+
+  const card = database.listCollectionPage("relist-user", { mode: "CARDS", limit: 1 }).items[0];
+  const first = database.createListing("relist-user", card.id, 900);
+  database.cancelListing("relist-user", first.id);
+  const second = database.createListing("relist-user", card.id, 1100);
+
+  assert.notEqual(second.id, first.id);
+  const history = database.db.prepare(
+    "SELECT status, price FROM listings WHERE card_id = ? ORDER BY created_at, price"
+  ).all(card.id);
+  assert.equal(history.length, 2);
+  assert.ok(history.some((row) => row.status === "CANCELLED" && Number(row.price) === 900));
+  assert.ok(history.some((row) => row.status === "ACTIVE" && Number(row.price) === 1100));
+});
