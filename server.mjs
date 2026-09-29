@@ -2,7 +2,7 @@ import http from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { claimPack, createListing, buyListing, getState } from "./src/database.mjs";
+import { claimPack, createListing, buyListing, getState, listCollectionPage, listDefinitionCopies } from "./src/database.mjs";
 import { searchCommonsImage } from "./src/media.mjs";
 import { getKnowledge } from "./src/knowledge.mjs";
 import { taxonomyStatus, searchTaxa, getTaxon, getChildren, getPath, getSubtree } from "./src/taxonomy-store.mjs";
@@ -115,6 +115,23 @@ async function api(request, response, url) {
     const uid = userId(request);
     if (request.method === "GET" && url.pathname === "/api/state") {
       return json(response, 200, getState(uid));
+    }
+    if (request.method === "GET" && url.pathname === "/api/collection") {
+      const mode = url.searchParams.get("mode") || "DISCOVERIES";
+      const filter = url.searchParams.get("filter") || "ALL";
+      const query = url.searchParams.get("q") || "";
+      const sort = url.searchParams.get("sort") || "RARITY";
+      const limit = Number(url.searchParams.get("limit") || 36);
+      const offset = Number(url.searchParams.get("offset") || 0);
+      return json(response, 200, listCollectionPage(uid, { mode, filter, query, sort, limit, offset }));
+    }
+    if (request.method === "GET" && url.pathname === "/api/collection/copies") {
+      const definitionId = url.searchParams.get("definitionId") || "";
+      const limit = Number(url.searchParams.get("limit") || 100);
+      return json(response, 200, {
+        definitionId,
+        items: listDefinitionCopies(uid, definitionId, limit),
+      });
     }
     if (request.method === "POST" && url.pathname === "/api/packs/open") {
       const result = claimPack(uid);
