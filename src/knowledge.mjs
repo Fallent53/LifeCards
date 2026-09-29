@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, isLikelyPhotographicMedia, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v13";
@@ -163,7 +163,7 @@ export function ncbiUrlForTaxId(taxId) {
 }
 
 function mediaCandidateScore(media, confidence = "LOW", resolver = "") {
-  if(!media?.imageUrl||!isLikelyPhotographicMedia(media))return -1;
+  if(!media?.imageUrl)return -1;
   let score=0;
 
   const level=String(confidence||"LOW").toUpperCase();
@@ -314,7 +314,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
       if(
         bestCandidate &&
         String(bestCandidate.confidence).toUpperCase()==="HIGH" &&
-        isLikelyPhotographicMedia(bestCandidate.media)
+        Boolean(bestCandidate.media?.imageUrl)
       ) break;
     } catch {
       // A failed provider must not prevent the next fallback.
@@ -324,7 +324,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   if(
     !bestCandidate ||
     String(bestCandidate.confidence||"").toUpperCase()!=="HIGH" ||
-    !isLikelyPhotographicMedia(bestCandidate.media)
+    !bestCandidate.media?.imageUrl
   ){
     try{
       const supplemental=await searchSupplementalRealMedia(
@@ -679,7 +679,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
       };
     }
 
-    if(media?.imageUrl&&isLikelyPhotographicMedia(media)){
+    if(media?.imageUrl){
       const value={
         query:entry.query,
         wikipedia:page?{
@@ -794,7 +794,7 @@ async function wikimediaArticleMediaForLanguage(entries,{lang="en"}={}){
       local ||
       wikipediaThumbnailFallback(page,lang);
 
-    if(!media?.imageUrl||!isLikelyPhotographicMedia(media))continue;
+    if(!media?.imageUrl)continue;
 
     const confidence=exactTaxonIdentity?"HIGH":"MEDIUM";
     const value={
@@ -929,7 +929,7 @@ export async function getCoverageMediaBatch(entries,{
 
   for(const entry of normalized){
     const value=wikimedia[entry.id]||null;
-    if(value?.media?.imageUrl&&isLikelyPhotographicMedia(value.media)){
+    if(value?.media?.imageUrl){
       output[entry.id]=value;
     }else{
       fallback.push(entry);
@@ -940,7 +940,7 @@ export async function getCoverageMediaBatch(entries,{
     const supplemental=await getAuditKnowledgeBatch(fallback,{lang});
     for(const entry of fallback){
       const value=supplemental[entry.id]||null;
-      if(value?.media?.imageUrl&&isLikelyPhotographicMedia(value.media)){
+      if(value?.media?.imageUrl){
         output[entry.id]=value;
       }else if(wikimedia[entry.id]?.auditTransientError){
         output[entry.id]=wikimedia[entry.id];
