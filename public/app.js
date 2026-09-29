@@ -550,44 +550,91 @@ function render(){
 
 function renderPacks(){
   const {user,config,inventory}=ui.state;
-  const slots=Array.from({length:user.maxPacks},(_,i)=>'<span class="storage-slot '+(i<user.packs?"filled":"")+'"></span>').join("");
   const recent=inventory.slice(0,6);
+  const summary=ui.state.collectionSummary||{};
+  const taxonomy=ui.taxonomyStatus;
+  const indexedCards=taxonomy?.dropPoolReady
+    ?Object.values(taxonomy.dropPool||{}).reduce((sum,value)=>sum+Number(value||0),0)
+    :0;
+  const slots=Array.from({length:user.maxPacks},(_,i)=>
+    '<span class="drop-storage-slot '+(i<user.packs?"filled":"")+'"><i></i></span>'
+  ).join("");
+
   main.innerHTML=
-    '<section class="pack-page">'+
-      '<div class="pack-copy">'+
-        '<span class="eyebrow">EXPEDITION SUPPLY</span>'+
-        '<h1>Open the living world.</h1>'+
-        '<p>Six discoveries per pack. Species, extinct life and phylogenetic nodes all share the same Tree of Life.</p>'+
-        '<div class="pack-rules"><span>6 cards</span><span>1 pack / 8 min</span><span>8 stored max</span><span>'+Math.round(config.holoRate*1000)/10+'% Holo</span>'+
-          (ui.taxonomyStatus?.dropPoolReady?'<span class="data-live">'+formatNumber(Object.values(ui.taxonomyStatus.dropPool||{}).reduce((a,b)=>a+b,0))+' indexed cards</span>':'<span class="data-seed">Seed drop pool</span>')+
+    '<section class="drop-page">'+
+      '<div class="drop-hero">'+
+        '<div class="drop-hero-copy">'+
+          '<span class="eyebrow">FIELD DROPS · TREE OF LIFE</span>'+
+          '<h1>Six cards.<br><em>One living tree.</em></h1>'+
+          '<p>Open a field archive and discover species, fossils and phylogenetic nodes. Every pull has a real position in the Tree of Life.</p>'+
+          '<div class="drop-facts">'+
+            '<span><b>6</b><small>cards / pack</small></span>'+
+            '<span><b>8 min</b><small>new pack</small></span>'+
+            '<span><b>8</b><small>stored max</small></span>'+
+            '<span><b>'+Math.round(config.holoRate*1000)/10+'%</b><small>Holo roll</small></span>'+
+          '</div>'+
         '</div>'+
+        '<aside class="drop-world-status">'+
+          '<span class="eyebrow">LIVE ARCHIVE</span>'+
+          '<div class="world-status-line"><i class="'+(taxonomy?.dropPoolReady?"live":"seed")+'"></i><div><b>'+(taxonomy?.dropPoolReady?formatNumber(indexedCards)+" indexed pulls":"Seed drop pool")+'</b><small>'+(taxonomy?.dropPoolReady?esc(taxonomy.dropScope||"Animalia")+" gameplay taxonomy":"Build Catalogue of Life with npm run sync:col")+'</small></div></div>'+
+          '<div class="world-status-line"><i class="'+(taxonomy?.fullLifeMap?"live":"seed")+'"></i><div><b>'+(taxonomy?.fullLifeMap?"Full Life Map":"Animalia map")+'</b><small>'+(taxonomy?.fullLifeMap?"Bacteria · Archaea · Eukaryota":"Optional full map: npm run sync:map")+'</small></div></div>'+
+        '</aside>'+
       '</div>'+
-      '<div class="pack-stage">'+
-        '<div class="ambient-ring ring-one"></div><div class="ambient-ring ring-two"></div>'+
-        '<button id="packObject" class="pack-object '+(user.packs<1?"empty":"")+'" '+(user.packs<1?"disabled":"")+'>'+
-          '<span class="pack-seal">LC</span>'+
-          '<div class="pack-lines"></div>'+
-          '<strong>FIELD<br>ARCHIVE</strong>'+
-          '<small>6 DISCOVERIES</small>'+
-          '<span class="pack-specimen">✦</span>'+
-        '</button>'+
-        '<button id="openPack" class="primary-cta" '+(user.packs<1?"disabled":"")+'>'+ (user.packs>0?"Open pack":"No pack ready") +'</button>'+
-        '<div class="storage-card">'+
-          '<div><b>'+user.packs+' / '+user.maxPacks+'</b><small>packs available</small></div>'+
-          '<div class="storage-slots">'+slots+'</div>'+
-          '<span id="nextPackTimer">'+(user.packs>=user.maxPacks?"Storage full":"Next in "+formatTimer(liveNextPackMs()))+'</span>'+
+
+      '<div class="drop-core">'+
+        '<aside class="drop-origin-panel '+(ui.state.origin?.discovered?"discovered":"")+'">'+
+          '<div class="origin-signal"><span></span><i></i></div>'+
+          '<span class="eyebrow">THE ORIGIN</span>'+
+          '<h2>LUCA</h2>'+
+          '<b>UNKNOWN · '+(ui.state.origin?.discovered?"1 / 1":"0 / 1")+'</b>'+
+          '<p>'+(ui.state.origin?.discovered
+            ?"The only Origin card has been discovered. Its provenance is permanent."
+            :"Exactly one exists globally. Every eligible pack has the same independent chance from pack one.")+'</p>'+
+          '<div class="origin-status"><i></i><span>'+(ui.state.origin?.discovered?"DISCOVERED":"DROP POOL ACTIVE")+'</span></div>'+
+        '</aside>'+
+
+        '<div class="drop-pack-console">'+
+          '<div class="drop-pack-rings"><i></i><i></i><i></i></div>'+
+          '<button id="packObject" class="premium-pack '+(user.packs<1?"empty":"")+'" '+(user.packs<1?"disabled":"")+'>'+
+            '<div class="premium-pack-crimp top"></div>'+
+            '<div class="premium-pack-body">'+
+              '<div class="premium-pack-brand"><span>LC</span><small>LIFECARDS</small></div>'+
+              '<div class="premium-pack-star">✦</div>'+
+              '<strong>FIELD<br>ARCHIVE</strong>'+
+              '<p>TREE OF LIFE COLLECTION</p>'+
+              '<div class="premium-pack-footer"><span>6 DISCOVERIES</span><b>01</b></div>'+
+            '</div>'+
+            '<div class="premium-pack-crimp bottom"></div>'+
+          '</button>'+
+          '<button id="openPack" class="drop-open-button" '+(user.packs<1?"disabled":"")+'>'+
+            (user.packs>0?'<span>Open field archive</span><small>'+user.packs+' ready</small>':'<span>No pack ready</span><small id="openPackTimer">'+formatTimer(liveNextPackMs())+'</small>')+
+          '</button>'+
         '</div>'+
+
+        '<aside class="drop-storage-panel">'+
+          '<div class="drop-storage-head"><div><span class="eyebrow">PACK STORAGE</span><b>'+user.packs+' <i>/ '+user.maxPacks+'</i></b></div><span id="nextPackTimer">'+(user.packs>=user.maxPacks?"FULL":"Next "+formatTimer(liveNextPackMs()))+'</span></div>'+
+          '<div class="drop-storage-slots">'+slots+'</div>'+
+          '<div class="drop-collection-mini">'+
+            '<div><b>'+formatNumber(summary.uniqueDiscoveries||0)+'</b><small>discoveries</small></div>'+
+            '<div><b>'+formatNumber(summary.totalCards||0)+'</b><small>cards owned</small></div>'+
+            '<div><b>'+formatNumber(summary.holoCards||0)+'</b><small>Holo</small></div>'+
+          '</div>'+
+          '<button data-view="collection" class="drop-secondary-action">Open collection →</button>'+
+        '</aside>'+
       '</div>'+
-      '<aside class="origin-tease '+(ui.state.origin?.discovered?"discovered":"")+'"><div class="origin-orbit"></div><span class="eyebrow">THE ORIGIN</span><h2>LUCA</h2><b>UNKNOWN · '+(ui.state.origin?.discovered?"1 / 1 DISCOVERED":"0 / 1 UNDISCOVERED")+'</b><p>'+(ui.state.origin?.discovered?"The unique Origin card has entered circulation. No second copy can ever be issued.":"One card. One owner. Eligible from the very first pack.")+'</p></aside>'+
     '</section>'+
-    '<section class="recent-section"><div class="section-head"><div><span class="eyebrow">RECENT DISCOVERIES</span><h2>Your latest cards</h2></div><button data-view="collection" class="ghost-button">View collection →</button></div>'+
-      '<div class="card-grid recent-grid">'+(recent.length?recent.map(c=>cardHtml(c,{compact:true})).join(""):'<div class="empty-state">Your first six discoveries will appear here.</div>')+'</div>'+
+
+    '<section class="drop-recent">'+
+      '<div class="drop-section-head"><div><span class="eyebrow">RECENT DISCOVERIES</span><h2>Latest from your archive</h2></div><button data-view="collection">View all →</button></div>'+
+      '<div class="card-grid recent-grid premium-recent">'+
+        (recent.length?recent.map(c=>cardHtml(c,{compact:true})).join(""):'<div class="empty-state">Your first six discoveries will appear here.</div>')+
+      '</div>'+
     '</section>';
+
   document.getElementById("openPack")?.addEventListener("click",openPack);
   document.getElementById("packObject")?.addEventListener("click",openPack);
-  warmMedia(recent.map(c=>c.definition));
+  wireMediaObservers();
 }
-
 
 function collectionQueryString(){
   const params=new URLSearchParams({
