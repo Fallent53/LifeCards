@@ -310,18 +310,18 @@ async function handleRequest(request, response) {
   return serveStatic(response, url.pathname);
 }
 
-function startServer(port, attemptsLeft = 10) {
+function startServer(port) {
   const server = http.createServer(handleRequest);
 
   server.once("error", (error) => {
-    if (error.code === "EADDRINUSE" && !hasExplicitPort && attemptsLeft > 0) {
-      const nextPort = port + 1;
-      console.warn(`Port ${port} is already in use. Trying ${nextPort}...`);
-      return startServer(nextPort, attemptsLeft - 1);
-    }
-
     if (error.code === "EADDRINUSE") {
-      console.error(`Port ${port} is already in use. Set PORT to another value, for example PORT=3001.`);
+      console.error("");
+      console.error(`LifeCards cannot start: port ${port} is already in use.`);
+      console.error("Another LifeCards/Node server is probably still running.");
+      console.error("Stop the old process first instead of silently opening a different port.");
+      console.error("");
+      console.error("PowerShell:");
+      console.error(`  Get-NetTCPConnection -LocalPort ${port} -State Listen | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }`);
     } else {
       console.error(error);
     }
