@@ -24,7 +24,8 @@
     "debug:media": "node scripts/debug-media.mjs",
     "reconcile:collection": "node scripts/reconcile-collection.mjs",
     "audit:collection": "node scripts/audit-cards.mjs --collection --limit 500",
-    "audit:wikimedia": "node scripts/audit-cards.mjs --limit 1000"
+    "audit:wikimedia": "node scripts/audit-cards.mjs --limit 1000",
+    "audit:coverage": "node scripts/audit-cards.mjs --limit 1000"
   },
   "engines": {
     "node": ">=22.5.0"
