@@ -245,6 +245,27 @@ export function buyListing(userId, listingId) {
   }
 }
 
+export function listSupplies() {
+  migrate();
+  const rows = db.prepare("SELECT definition_id, edition_key, issued_count FROM supplies ORDER BY definition_id, edition_key").all();
+  return rows.map((row) => ({
+    definitionId: row.definition_id,
+    edition: row.edition_key,
+    issued: Number(row.issued_count),
+  }));
+}
+
+export function getOriginStatus() {
+  migrate();
+  const card = db.prepare("SELECT owner_id, created_at FROM cards WHERE definition_id = 'luca' ORDER BY created_at ASC LIMIT 1").get();
+  return {
+    discovered: Boolean(card),
+    issued: card ? 1 : 0,
+    maxSupply: 1,
+    discoveredAt: card ? Number(card.created_at) : null,
+  };
+}
+
 export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
   migrate();
   const user = syncAccrual(userId, config);
@@ -255,6 +276,8 @@ export function getState(userId = "explorer", config = DEFAULT_CONFIG) {
     inventory,
     market: listMarket(),
     catalog: publicCatalog(),
+    supplies: listSupplies(),
+    origin: getOriginStatus(),
     config: { packIntervalMs: config.packIntervalMs, cardsPerPack: config.cardsPerPack, maxStoredPacks: config.maxStoredPacks, holoRate: config.holoRate, lucaRarityLabel: "UNKNOWN" },
   };
 }
