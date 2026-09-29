@@ -63,6 +63,7 @@ export function definitionFromTaxon(taxon) {
     curatedDefinitionId: curated?.id || null,
     kind,
     scientificName,
+    canonicalName: taxon.canonicalName || scientificName,
     commonName,
     parentId: taxon.parentId ? String(taxon.parentId) : null,
     rank: taxon.rank || (kind === "species" ? "species" : "unranked"),
@@ -72,7 +73,7 @@ export function definitionFromTaxon(taxon) {
     editionCap: curated?.editionCap ?? (kind === "taxon" ? taxonEditionCap(taxon.rank) : 0),
     icon: curated?.icon || iconForRank(taxon.rank, kind),
     conservation: curated?.conservation || null,
-    mediaQuery: curated?.mediaQuery || scientificName,
+    mediaQuery: curated?.mediaQuery || taxon.canonicalName || scientificName,
     summary: curated?.summary || (
       kind === "species"
         ? "Catalogue of Life species. Scientific details and media are resolved lazily when viewed."
