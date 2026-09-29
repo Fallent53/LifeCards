@@ -11,7 +11,8 @@ const ui={
   favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
   revealIndex:0,
-  opening:false
+  opening:false,
+  stateFetchedAt:Date.now()
 };
 
 const main=document.getElementById("main");
@@ -57,6 +58,16 @@ function esc(value=""){
 }
 
 function formatNumber(value){return new Intl.NumberFormat("en-US").format(value)}
+
+function liveNextPackMs(){
+  if(!ui.state)return 0;
+  if(ui.state.user.packs>=ui.state.user.maxPacks)return 0;
+  return Math.max(0,ui.state.user.nextPackInMs-(Date.now()-ui.stateFetchedAt));
+}
+
+function supplyFor(definitionId,edition){
+  return ui.state?.supplies?.find(s=>s.definitionId===definitionId&&s.edition===edition)||null;
+}
 
 function formatTimer(ms){
   const total=Math.max(0,Math.ceil(ms/1000));
@@ -212,6 +223,12 @@ function updateChrome(){
     coins.textContent=formatNumber(ui.state.user.coins);
     packBadge.textContent=ui.state.user.packs||"";
     packBadge.classList.toggle("visible",ui.state.user.packs>0);
+    const originSmall=document.querySelector(".origin-mini small");
+    if(originSmall){
+      originSmall.textContent=ui.state.origin?.discovered
+        ?"DISCOVERED · 1 / 1"
+        :"#1 / 1 · undiscovered";
+    }
   }
 }
 
@@ -251,10 +268,10 @@ function renderPacks(){
         '<div class="storage-card">'+
           '<div><b>'+user.packs+' / '+user.maxPacks+'</b><small>packs available</small></div>'+
           '<div class="storage-slots">'+slots+'</div>'+
-          '<span>'+(user.packs>=user.maxPacks?"Storage full":"Next in "+formatTimer(user.nextPackInMs))+'</span>'+
+          '<span id="nextPackTimer">'+(user.packs>=user.maxPacks?"Storage full":"Next in "+formatTimer(liveNextPackMs()))+'</span>'+
         '</div>'+
       '</div>'+
-      '<aside class="origin-tease"><div class="origin-orbit"></div><span class="eyebrow">THE ORIGIN</span><h2>LUCA</h2><b>UNKNOWN · #1 / 1</b><p>One card. One owner. Eligible from the very first pack.</p></aside>'+
+      '<aside class="origin-tease '+(ui.state.origin?.discovered?"discovered":"")+'"><div class="origin-orbit"></div><span class="eyebrow">THE ORIGIN</span><h2>LUCA</h2><b>UNKNOWN · '+(ui.state.origin?.discovered?"1 / 1 DISCOVERED":"0 / 1 UNDISCOVERED")+'</b><p>'+(ui.state.origin?.discovered?"The unique Origin card has entered circulation. No second copy can ever be issued.":"One card. One owner. Eligible from the very first pack.")+'</p></aside>'+
     '</section>'+
     '<section class="recent-section"><div class="section-head"><div><span class="eyebrow">RECENT DISCOVERIES</span><h2>Your latest cards</h2></div><button data-view="collection" class="ghost-button">View collection →</button></div>'+
       '<div class="card-grid recent-grid">'+(recent.length?recent.map(c=>cardHtml(c,{compact:true})).join(""):'<div class="empty-state">Your first six discoveries will appear here.</div>')+'</div>'+
@@ -460,6 +477,12 @@ function renderCardModal(definition,card){
   const summary=live?.wikipedia?.extract||definition.summary||"";
   const sourceLine=live?.sources?.length?live.sources.join(" · "):"Wikipedia / Wikidata / Lifemap resolving…";
   const taxId=live?.taxonomy?.ncbiTaxId||null;
+  const currentEdition=card?.edition||(
+    definition.kind==="taxon"?"FOUNDATION I":
+    definition.temporalStatus==="extinct"?"FOSSIL RECORD I":
+    definition.kind==="origin"?"ORIGIN":"WILD CENSUS I"
+  );
+  const supply=supplyFor(definition.id,currentEdition);
 
   cardModalContent.innerHTML=
     '<div class="detail-layout">'+
@@ -476,6 +499,7 @@ function renderCardModal(definition,card){
           (definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+
           (taxId?'<div><dt>NCBI Taxonomy ID</dt><dd>'+esc(taxId)+'</dd></div>':"")+
           (live?.wikidata?.id?'<div><dt>Wikidata</dt><dd>'+esc(live.wikidata.id)+'</dd></div>':"")+
+          (supply?'<div><dt>Issued supply</dt><dd>'+formatNumber(supply.issued)+(card?.serialCap?" / "+formatNumber(card.serialCap):"")+'</dd></div>':"")+
         '</dl>'+
         '<div class="source-actions">'+knowledgeSourceButtons(live)+'</div>'+
         '<div class="source-meta"><span>'+esc(sourceLine)+'</span>'+
@@ -515,6 +539,7 @@ async function buy(listingId){
 
 async function refresh(shouldRender=true){
   ui.state=await api("/api/state");
+  ui.stateFetchedAt=Date.now();
   updateChrome();
   if(shouldRender)render();
 }
@@ -525,7 +550,12 @@ cardModal.addEventListener("click",event=>{if(event.target===cardModal)cardModal
 
 setInterval(()=>{
   if(!ui.state)return;
-  if(ui.view==="packs"&&!revealDialog.open)refresh().catch(()=>{});
-},10000);
+  const timerEl=document.getElementById("nextPackTimer");
+  if(timerEl&&ui.state.user.packs<ui.state.user.maxPacks){
+    const remaining=liveNextPackMs();
+    timerEl.textContent="Next in "+formatTimer(remaining);
+    if(remaining<=0&&!revealDialog.open)refresh().catch(()=>{});
+  }
+},1000);
 
 refresh().catch(error=>{main.innerHTML='<div class="fatal">'+esc(error.message)+'</div>'});
