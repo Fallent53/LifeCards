@@ -1,3 +1,58 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#07130f"><title>LifeCards</title><link rel="stylesheet" href="/styles.css"></head>
-<body><header><button class="brand" data-view="packs">◉ LifeCards<small>Tree of Life TCG</small></button><nav><button data-view="packs">Drops</button><button data-view="collection">Collection</button><button data-view="tree">Tree</button><button data-view="market">Market</button><button data-view="codex">Codex</button></nav><span class="coins">◆ <b id="coins">—</b></span></header><main id="main"></main><dialog id="reveal"><button id="close">×</button><h2>Pack opened</h2><div id="revealGrid" class="grid"></div><div id="origin"></div></dialog><div id="toast"></div><script type="module" src="/app.js"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#07110d">
+  <meta name="description" content="LifeCards — collect the Tree of Life.">
+  <title>LifeCards</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <button class="brand" data-view="packs">
+        <span class="brand-mark">LC</span>
+        <span><b>LifeCards</b><small>Tree of Life</small></span>
+      </button>
+      <nav class="side-nav">
+        <button data-view="packs"><span>✦</span><b>Drops</b><i id="packBadge"></i></button>
+        <button data-view="collection"><span>▤</span><b>Collection</b></button>
+        <button data-view="tree"><span>⌘</span><b>Tree of Life</b></button>
+        <button data-view="market"><span>◇</span><b>Market</b></button>
+        <button data-view="codex"><span>◎</span><b>Codex</b></button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="origin-mini"><span>UNKNOWN</span><b>LUCA</b><small>#1 / 1 · undiscovered</small></div>
+        <div class="account-chip"><span class="avatar">E</span><div><b>Explorer</b><small>Field researcher</small></div></div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <span class="topbar-kicker" id="viewKicker">FIELD DROPS</span>
+          <b id="viewTitle">Open a pack</b>
+        </div>
+        <div class="topbar-right">
+          <span class="currency"><i>◆</i><b id="coins">—</b></span>
+          <span class="status-dot"></span>
+        </div>
+      </header>
+      <main id="main"></main>
+    </div>
+  </div>
+
+  <dialog id="reveal" class="reveal-dialog">
+    <div id="revealScene"></div>
+  </dialog>
+
+  <dialog id="cardModal" class="card-modal">
+    <button class="dialog-close" id="closeCard">×</button>
+    <div id="cardModalContent"></div>
+  </dialog>
+
+  <div id="toast"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
