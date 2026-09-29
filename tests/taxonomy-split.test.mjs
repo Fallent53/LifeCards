@@ -161,11 +161,19 @@ test("map lookups use full-life database while gameplay resolution uses Eukaryot
   assert.equal(taxonomy.getGameplayTaxon("game-fungi")?.scientificName,"Fungi");
 });
 
-test("drop selection uses only READY cards after a complete audit",()=>{
-  const picked=taxonomy.pickDropTaxon("COMMON",{int:()=>0});
+test("drop selection is independent from media audit readiness",()=>{
+  const first=taxonomy.pickDropTaxon("COMMON",{int:()=>0});
+  assert.equal(first?.id,"game-species");
+
+  const second=taxonomy.pickDropTaxon("COMMON",{int:()=>1});
+  assert.equal(second?.id,"game-unready");
+  assert.equal(second?.scientificName,"Wrongus imagus");
+});
+
+test("missing rarity buckets fall back to the in-scope drop pool",()=>{
+  const picked=taxonomy.pickDropTaxon("UNCOMMON",{int:()=>0});
+  assert.ok(picked);
   assert.equal(picked?.id,"game-species");
-  assert.equal(picked?.scientificName,"Testus animalis");
-  assert.notEqual(picked?.id,"game-unready");
 });
 
 test("LUCA map exposes the three domains from full-life taxonomy",()=>{
