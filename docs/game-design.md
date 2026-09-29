@@ -26,3 +26,18 @@ Cards preserve definition, edition, serial and finish through trades. The MVP us
 
 ## Scientific boundary
 Conservation status, wild abundance and in-game rarity are separate concepts. Gameplay rarity must never masquerade as scientific rarity.
+
+
+## Knowledge progression
+
+The Knowledge Lab generates questions from the current LifeCards taxonomy snapshot. Correct answers award Knowledge Points and a small Coin reward. Knowledge score is profile prestige only: it does not affect drop odds, Holo probability, card power or LUCA probability.
+
+## Scientific provenance in UI
+
+Card detail pages distinguish:
+- the immutable collectible record (edition, serial, finish);
+- the current LifeCards taxonomy snapshot;
+- a Wikipedia overview;
+- the NCBI Taxonomy record;
+- an external Lifemap tree link;
+- image creator and license metadata.
