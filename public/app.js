@@ -87,13 +87,27 @@ const TITLES={
 };
 
 async function api(path,options={}){
-  const response=await fetch(path,{
-    ...options,
-    headers:{"Content-Type":"application/json","x-lifecards-user":"explorer",...(options.headers||{})}
-  });
-  const body=await response.json();
-  if(!response.ok)throw new Error(body.error||"Request failed");
-  return body;
+  const {timeoutMs=20000,...fetchOptions}=options;
+  const timeoutController=new AbortController();
+  const timeout=setTimeout(()=>timeoutController.abort(),Math.max(1000,Number(timeoutMs)||20000));
+
+  try{
+    const response=await fetch(path,{
+      ...fetchOptions,
+      signal:fetchOptions.signal||timeoutController.signal,
+      headers:{"Content-Type":"application/json","x-lifecards-user":"explorer",...(fetchOptions.headers||{})}
+    });
+    const body=await response.json();
+    if(!response.ok)throw new Error(body.error||"Request failed");
+    return body;
+  }catch(error){
+    if(error?.name==="AbortError"){
+      throw new Error("Request timed out. The server is busy; retry in a moment.");
+    }
+    throw error;
+  }finally{
+    clearTimeout(timeout);
+  }
 }
 
 function esc(value=""){
@@ -677,7 +691,7 @@ async function loadCollectionData({resetPage=false}={}){
   renderCollection();
 
   try{
-    const result=await api("/api/collection?"+collectionQueryString());
+    const result=await api("/api/collection?"+collectionQueryString(),{timeoutMs:8000});
     if(token!==ui.collectionRequestToken)return;
     ui.collectionData=result;
     ui.collectionLoading=false;
