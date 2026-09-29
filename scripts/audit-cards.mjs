@@ -171,6 +171,18 @@ function stats(){
   };
 }
 
+function reasonBreakdown(status){
+  return taxonomy.prepare(`
+    SELECT q.reason AS reason, COUNT(*) AS count
+    FROM drop_pool p
+    JOIN qualitydb.card_quality q ON q.taxon_id=p.taxon_id
+    WHERE q.resolver_version=? AND q.status=?
+    GROUP BY q.reason
+    ORDER BY count DESC, q.reason
+    LIMIT 12
+  `).all(AUDIT_RESOLVER_VERSION,status);
+}
+
 function printStats(label="Card quality"){
   const value=stats();
   console.log("");
@@ -185,6 +197,25 @@ function printStats(label="Card quality"){
   console.log(`ERROR          : ${value.error.toLocaleString()}`);
   console.log(`Unchecked      : ${value.unchecked.toLocaleString()}`);
   console.log(`Complete       : ${value.complete?"yes":"no"}`);
+
+  if(value.review){
+    console.log("");
+    console.log("Top REVIEW reasons");
+    console.log("─".repeat(52));
+    for(const row of reasonBreakdown("REVIEW")){
+      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
+    }
+  }
+
+  if(value.noImage){
+    console.log("");
+    console.log("Top NO_IMAGE reasons");
+    console.log("─".repeat(52));
+    for(const row of reasonBreakdown("NO_IMAGE")){
+      console.log(`${Number(row.count).toLocaleString().padStart(7)} · ${row.reason||"(no reason)"}`);
+    }
+  }
+
   return value;
 }
 
