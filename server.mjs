@@ -12,6 +12,15 @@ const publicDir = join(root, "public");
 const preferredPort = Number(process.env.PORT ?? 3000);
 const hasExplicitPort = process.env.PORT != null;
 
+const securityHeaders = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "X-Frame-Options": "DENY",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Content-Security-Policy": "default-src 'self'; img-src 'self' https://upload.wikimedia.org data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+};
+
 const mime = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
@@ -27,6 +36,7 @@ function userId(request) {
 function json(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, {
+    ...securityHeaders,
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
     "Content-Length": Buffer.byteLength(body),
@@ -46,6 +56,14 @@ async function bodyJson(request) {
 async function api(request, response, url) {
   try {
     const uid = userId(request);
+    if (request.method === "GET" && url.pathname === "/api/health") {
+      return json(response, 200, {
+        ok: true,
+        service: "LifeCards",
+        version: "0.2.0-alpha",
+        timestamp: Date.now(),
+      });
+    }
     if (request.method === "GET" && url.pathname === "/api/state") {
       return json(response, 200, getState(uid));
     }
@@ -115,18 +133,19 @@ async function serveStatic(response, pathname) {
   const safe = normalize(requested).replace(/^([.][.][/\\])+/, "").replace(/^[/\\]+/, "");
   const file = join(publicDir, safe);
   if (!file.startsWith(publicDir)) {
-    response.writeHead(403); return response.end("Forbidden");
+    response.writeHead(403, securityHeaders); return response.end("Forbidden");
   }
   try {
     const content = await readFile(file);
     response.writeHead(200, {
+      ...securityHeaders,
       "Content-Type": mime[extname(file)] || "application/octet-stream",
       "Cache-Control": "no-cache",
     });
     response.end(content);
   } catch {
     const fallback = await readFile(join(publicDir, "index.html"));
-    response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    response.writeHead(200, { ...securityHeaders, "Content-Type": "text/html; charset=utf-8" });
     response.end(fallback);
   }
 }
