@@ -3,7 +3,8 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, searchCommonsImage } from "./media.mjs";
 
-const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
+const CACHE_SCHEMA_VERSION = "v3";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -133,11 +134,12 @@ export function ncbiUrlForTaxId(taxId) {
 export async function getKnowledge(query, { lang = "en" } = {}) {
   const normalized = String(query || "").trim();
   if (!normalized) return null;
-  const cacheKey = `${lang}:${normalized.toLowerCase()}`;
+  const persistedQuery = `${CACHE_SCHEMA_VERSION}:${normalized.toLowerCase()}`;
+  const cacheKey = `${lang}:${persistedQuery}`;
   const cached = cache.get(cacheKey);
   if (cached && Date.now() - cached.storedAt < CACHE_TTL_MS) return cached.value;
 
-  const persisted = readPersistentCache(normalized.toLowerCase(), lang);
+  const persisted = readPersistentCache(persistedQuery, lang);
   if (persisted) {
     cache.set(cacheKey, { storedAt: Date.now(), value: persisted });
     return persisted;
@@ -168,12 +170,19 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     null;
 
   let media = null;
-  try {
-    if (page?.pageimage) media = await getCommonsFileMetadata(page.pageimage);
-    if (!media && wikidataImage) media = await getCommonsFileMetadata(wikidataImage);
-    if (!media) media = await searchCommonsImage(taxonName);
-  } catch {
-    media = null;
+  const mediaAttempts = [
+    async () => page?.pageimage ? getCommonsFileMetadata(page.pageimage) : null,
+    async () => wikidataImage ? getCommonsFileMetadata(wikidataImage) : null,
+    async () => searchCommonsImage(taxonName),
+    async () => normalized !== taxonName ? searchCommonsImage(normalized) : null,
+  ];
+  for (const attempt of mediaAttempts) {
+    if (media) break;
+    try {
+      media = await attempt();
+    } catch {
+      // A failed provider must not prevent the next fallback.
+    }
   }
 
   const value = {
@@ -220,6 +229,6 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   };
 
   cache.set(cacheKey, { storedAt: Date.now(), value });
-  writePersistentCache(normalized.toLowerCase(), lang, value);
+  writePersistentCache(persistedQuery, lang, value);
   return value;
 }
