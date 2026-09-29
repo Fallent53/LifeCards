@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getAuditKnowledgeBatch } from "../src/knowledge.mjs";
+import { getWikimediaArticleMediaBatch } from "../src/knowledge.mjs";
 
 const args=new Map();
 for(let i=2;i<process.argv.length;i+=1){
@@ -27,7 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
-const AUDIT_RESOLVER_VERSION="v16-inat-exact-taxon-id";
+const AUDIT_RESOLVER_VERSION="v17-wikimaster-wikimedia";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const auditCollection=args.get("collection")==="true";
@@ -388,20 +388,15 @@ function classify(row,knowledge){
 
   const media=knowledge?.media||null;
   if(!media?.imageUrl){
-    return {status:"NO_IMAGE",reason:"no reusable licensed image resolved"};
+    return {status:"NO_IMAGE",reason:"no free Wikipedia article image resolved"};
+  }
+
+  if(media.resolver!=="wikipedia-pageimage-free"){
+    return {status:"REVIEW",reason:"non-Wikipedia media excluded from gameplay"};
   }
 
   if(!looksLikeRealMedia(media)){
     return {status:"REVIEW",reason:"non-photographic media rejected for gameplay"};
-  }
-
-  if(
-    !Boolean(row.extinct) &&
-    /museum specimen|preserved specimen|fossil specimen|\bfossil\b|\bskull\b|\bbones?\b|\bherbarium\b|\bmounted\b|\bdrawer\b/i.test(
-      [media.source,media.title,media.originalUrl,media.resolver].filter(Boolean).join(" ")
-    )
-  ){
-    return {status:"REVIEW",reason:"non-natural specimen/fossil media rejected for extant gameplay"};
   }
 
   const requiredAttribution=Boolean(media.creator&&media.license&&media.originalUrl);
@@ -462,7 +457,7 @@ for(let offset=0;offset<rows.length;offset+=auditBatchSize){
 
   let resolved={};
   try{
-    resolved=await getAuditKnowledgeBatch(entries,{lang:"en"});
+    resolved=await getWikimediaArticleMediaBatch(entries);
   }catch{
     resolved={};
   }
