@@ -1062,26 +1062,69 @@ function wireCommon(){
   wireMediaObservers();
 }
 
+function wait(ms){return new Promise(resolve=>setTimeout(resolve,ms))}
+
+function revealRarityClass(card){
+  return "reveal-rarity-"+String(card?.definition?.rarity||card?.rarity||"COMMON").toLowerCase().replaceAll("_","-");
+}
+
+function revealSummaryCard(card){
+  const d=card.definition;
+  const rarity=RARITY[d.rarity]||{short:"?"};
+  return '<article class="reveal-summary-card '+revealRarityClass(card)+' '+(card.finish==="HOLO"?"holo":"")+'">'+
+    '<div class="reveal-summary-art">'+imageMarkup(d)+'<span>'+esc(rarity.short)+'</span>'+(card.finish==="HOLO"?'<i>✦</i>':"")+'</div>'+
+    '<div><b>'+esc(d.commonName)+'</b><em>'+esc(d.scientificName)+'</em><small>'+esc(card.edition)+' · '+esc(serial(card))+'</small></div>'+
+  '</article>';
+}
+
 async function openPack(){
   if(ui.opening||ui.state.user.packs<1)return;
   ui.opening=true;
+
   try{
     revealDialog.showModal();
     revealScene.innerHTML=
-      '<div class="opening-stage">'+
+      '<div class="opening-stage opening-sequence">'+
         '<button class="reveal-close" data-close-reveal>×</button>'+
-        '<div class="opening-title"><span>FIELD ARCHIVE</span><b>Preparing 6 discoveries…</b></div>'+
-        '<div class="opening-pack animate"><span class="pack-seal">LC</span><strong>FIELD<br>ARCHIVE</strong><small>6 DISCOVERIES</small></div>'+
+        '<div class="opening-title"><span>FIELD ARCHIVE</span><b>Opening biological archive</b><small>Six discoveries are being authenticated…</small></div>'+
+        '<div class="opening-pack-rig">'+
+          '<div class="opening-pack-shadow"></div>'+
+          '<div class="opening-pack-shell">'+
+            '<div class="opening-pack-top"></div>'+
+            '<span class="pack-seal">LC</span>'+
+            '<div class="pack-lines"></div>'+
+            '<strong>FIELD<br>ARCHIVE</strong>'+
+            '<small>6 DISCOVERIES</small>'+
+            '<i class="opening-pack-mark">✦</i>'+
+          '</div>'+
+        '</div>'+
+        '<div class="opening-scan"><i></i></div>'+
         '<div class="opening-pulse"></div>'+
       '</div>';
+
     document.querySelector("[data-close-reveal]")?.addEventListener("click",()=>revealDialog.close());
-    const result=await api("/api/packs/open",{method:"POST",body:"{}"});
+
+    const [result]=await Promise.all([
+      api("/api/packs/open",{method:"POST",body:"{}"}),
+      wait(850)
+    ]);
+
     ui.reveal={cards:result.cards,originCard:result.originCard};
     ui.revealIndex=0;
-    setTimeout(()=>renderReveal(),420);
-    warmMedia(result.cards.map(c=>c.definition),{rerender:false}).then(()=>{
+
+    const stage=revealScene.querySelector(".opening-stage");
+    stage?.classList.add("pack-ripped");
+    await wait(560);
+
+    renderReveal();
+
+    warmMedia(
+      [...result.cards,result.originCard].filter(Boolean).map(card=>card.definition),
+      {rerender:false}
+    ).then(()=>{
       if(revealDialog.open&&ui.reveal)renderReveal();
     }).catch(()=>{});
+
     await refresh(false);
   }catch(error){
     revealDialog.close();
@@ -1091,34 +1134,91 @@ async function openPack(){
   }
 }
 
+function renderRevealSummary(){
+  if(!ui.reveal)return;
+  const cards=[...ui.reveal.cards,...(ui.reveal.originCard?[ui.reveal.originCard]:[])];
+
+  revealScene.innerHTML=
+    '<div class="reveal-summary">'+
+      '<button class="reveal-close" data-close-reveal>×</button>'+
+      '<div class="reveal-summary-head"><span class="eyebrow">ARCHIVE COMPLETE</span><h2>Your discoveries</h2><p>'+ui.reveal.cards.length+' cards catalogued'+(ui.reveal.originCard?' · Origin event detected':'')+'.</p></div>'+
+      '<div class="reveal-summary-grid">'+cards.map(revealSummaryCard).join("")+'</div>'+
+      '<div class="reveal-summary-actions"><button class="reveal-next summary-continue" id="revealFinish">Add to collection</button></div>'+
+    '</div>';
+
+  document.querySelector("[data-close-reveal]")?.addEventListener("click",finishReveal);
+  document.getElementById("revealFinish")?.addEventListener("click",finishReveal);
+  wireMediaObservers();
+}
+
 function renderReveal(){
   if(!ui.reveal)return;
-  const isOrigin=ui.revealIndex>=ui.reveal.cards.length&&ui.reveal.originCard;
-  const card=isOrigin?ui.reveal.originCard:ui.reveal.cards[Math.min(ui.revealIndex,ui.reveal.cards.length-1)];
+
+  const total=ui.reveal.cards.length+(ui.reveal.originCard?1:0);
+  if(ui.revealIndex>=total){
+    renderRevealSummary();
+    return;
+  }
+
+  const isOrigin=Boolean(ui.reveal.originCard&&ui.revealIndex===ui.reveal.cards.length);
+  const card=isOrigin?ui.reveal.originCard:ui.reveal.cards[ui.revealIndex];
+  const rarity=RARITY[card.definition.rarity]||{label:card.definition.rarity,short:"?"};
+  const isHolo=card.finish==="HOLO";
   const normalIndex=Math.min(ui.revealIndex+1,ui.reveal.cards.length);
-  const lastNormal=ui.revealIndex===ui.reveal.cards.length-1;
-  const hasOrigin=Boolean(ui.reveal.originCard);
-  const final=isOrigin||(!hasOrigin&&lastNormal);
+  const remaining=Math.max(0,total-ui.revealIndex-1);
+
   revealScene.innerHTML=
-    '<div class="reveal-layout '+(isOrigin?"origin-mode":"")+'">'+
+    '<div class="reveal-layout '+revealRarityClass(card)+' '+(isOrigin?"origin-mode ":"")+(isHolo?"holo-impact":"")+'">'+
+      '<div class="rarity-flare"></div>'+
+      '<div class="reveal-noise"></div>'+
       '<button class="reveal-close" data-close-reveal>×</button>'+
-      '<div class="reveal-counter">'+(isOrigin?'ORIGIN DETECTED':'CARD <b>'+normalIndex+'</b> / '+ui.reveal.cards.length)+'</div>'+
-      '<div class="single-card-wrap enter">'+cardHtml(card,{interactive:false})+'</div>'+
-      '<div class="reveal-dots">'+ui.reveal.cards.map((_,i)=>'<i class="'+(i<=ui.revealIndex&&!isOrigin?"active":"")+'"></i>').join("")+(hasOrigin?'<i class="origin-dot '+(isOrigin?"active":"")+'"></i>':"")+'</div>'+
-      '<button class="reveal-next" id="revealNext">'+(final?"Continue":(isOrigin?"Continue":lastNormal&&hasOrigin?"Reveal anomaly":"Next card · "+(ui.reveal.cards.length-normalIndex)+" left"))+'</button>'+
+      '<div class="reveal-counter">'+
+        (isOrigin
+          ?'<span>ORIGIN DETECTED</span><b>UNKNOWN · #1/1</b>'
+          :'<span>DISCOVERY '+normalIndex+' / '+ui.reveal.cards.length+'</span><b>'+esc(rarity.label)+(isHolo?' · HOLO':'')+'</b>')+
+      '</div>'+
+      '<div class="reveal-card-stage">'+
+        '<div class="reveal-card-aura"></div>'+
+        '<div class="single-card-wrap enter">'+cardHtml(card,{interactive:false})+'</div>'+
+      '</div>'+
+      '<div class="reveal-card-caption">'+
+        '<span>'+esc(card.edition)+'</span>'+
+        '<b>'+esc(serial(card))+'</b>'+
+        '<small>'+esc(card.definition.rank||card.definition.kind||"")+'</small>'+
+      '</div>'+
+      '<div class="reveal-dots">'+
+        ui.reveal.cards.map((_,i)=>'<i class="'+(i<ui.revealIndex||(!isOrigin&&i===ui.revealIndex)?"active":"")+'"></i>').join("")+
+        (ui.reveal.originCard?'<i class="origin-dot '+(isOrigin?"active":"")+'"></i>':"")+
+      '</div>'+
+      '<button class="reveal-next" id="revealNext">'+(remaining?'Next discovery · '+remaining+' left':'View pack recap')+'</button>'+
+      '<small class="reveal-shortcut">Click the card or press Space / →</small>'+
     '</div>';
-  document.querySelector("[data-close-reveal]")?.addEventListener("click",finishReveal);
-  document.getElementById("revealNext").onclick=()=>{
-    if(final)return finishReveal();
+
+  const advance=()=>{
     ui.revealIndex+=1;
     renderReveal();
   };
-  document.querySelector(".single-card-wrap")?.addEventListener("click",()=>{
-    if(!final){ui.revealIndex+=1;renderReveal()}
-  });
+
+  document.querySelector("[data-close-reveal]")?.addEventListener("click",finishReveal);
+  document.getElementById("revealNext")?.addEventListener("click",advance);
+  document.querySelector(".single-card-wrap")?.addEventListener("click",advance);
+
+  revealDialog.onkeydown=(event)=>{
+    if([" ","ArrowRight","Enter"].includes(event.key)){
+      event.preventDefault();
+      advance();
+    }
+    if(event.key==="Escape"){
+      event.preventDefault();
+      finishReveal();
+    }
+  };
+
+  wireMediaObservers();
 }
 
 function finishReveal(){
+  revealDialog.onkeydown=null;
   revealDialog.close();
   ui.reveal=null;
   ui.revealIndex=0;
