@@ -49,6 +49,7 @@ export async function getCommonsFileMetadata(fileName) {
     titles: `File:${normalized}`,
     prop: "imageinfo",
     iiprop: "url|extmetadata",
+    iiextmetadatafilter: "Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
     iiurlwidth: "1200",
   });
 
@@ -71,9 +72,10 @@ export async function searchCommonsImage(query) {
     generator: "search",
     gsrsearch: String(query),
     gsrnamespace: "6",
-    gsrlimit: "12",
+    gsrlimit: "8",
     prop: "imageinfo",
     iiprop: "url|extmetadata",
+    iiextmetadatafilter: "Artist|Credit|LicenseShortName|UsageTerms|LicenseUrl|Attribution",
     iiurlwidth: "1200",
   });
 
