@@ -142,3 +142,45 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .radial-map-toolbar{top:8px;left:8px;right:8px}.radial-map-title small{display:none}
   .radial-node-label{font-size:6.4px}.radial-node-rank{display:none}.tree-map-foot{flex-direction:column}
 }
+
+/* ===== Wide-screen product layout pass ===== */
+@media(min-width:1350px){
+  main{max-width:none;margin:0;padding-left:clamp(42px,4.2vw,92px);padding-right:clamp(42px,4.2vw,92px)}
+  .pack-page{
+    grid-template-columns:minmax(360px,.82fr) minmax(470px,1.12fr) minmax(270px,.58fr);
+    gap:clamp(26px,2.8vw,64px);
+    min-height:680px;
+    align-items:center
+  }
+  .pack-copy{max-width:680px}
+  .pack-copy h1{font-size:clamp(58px,4.7vw,82px);max-width:620px}
+  .pack-copy>p{max-width:590px;font-size:13px}
+  .pack-stage{min-height:620px;max-width:650px;width:100%;justify-self:center}
+  .origin-tease{
+    position:relative;left:auto;bottom:auto;width:100%;min-height:310px;margin:0;
+    display:flex;flex-direction:column;justify-content:flex-end;padding:24px;
+    background:
+      radial-gradient(circle at 72% 24%,rgba(137,93,209,.22),transparent 26%),
+      radial-gradient(circle at 50% 0,#21182f,transparent 56%),#0b0a10
+  }
+  .origin-tease:before{
+    content:"";position:absolute;top:42px;left:50%;width:116px;height:116px;transform:translateX(-50%);
+    border:1px solid #624b8c;border-radius:50%;box-shadow:0 0 0 24px #8b6bc50a,0 0 0 49px #8b6bc507
+  }
+  .origin-tease:after{
+    content:"✺";position:absolute;top:74px;left:50%;transform:translateX(-50%);
+    color:#bd9cff;font-size:39px;text-shadow:0 0 30px #8d64dd
+  }
+  .origin-tease .origin-orbit{right:50%;top:47px;transform:translateX(50%);width:105px;height:105px}
+  .origin-tease h2{font-size:42px}
+  .recent-section{margin-top:4px}
+  .recent-grid{grid-template-columns:repeat(6,minmax(165px,1fr))}
+}
+@media(min-width:2000px){
+  .pack-page{grid-template-columns:minmax(430px,.9fr) minmax(560px,1.05fr) minmax(330px,.55fr);gap:70px}
+  .pack-stage{max-width:760px;min-height:680px}
+  .pack-object{width:235px;height:345px}
+  .pack-object strong,.opening-pack strong{font-size:35px}
+  .recent-grid{grid-template-columns:repeat(6,minmax(190px,1fr));gap:24px}
+  .section-head{margin-top:58px}
+}
