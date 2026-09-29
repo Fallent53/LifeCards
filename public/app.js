@@ -394,6 +394,7 @@ function taxonToDefinition(taxon){
       :"",
     source:taxon.source||"Catalogue of Life",
     childCount:Number(taxon.childCount||0),
+    descendantSpeciesCount:Number(taxon.descendantSpeciesCount||0),
     collectible:Boolean(ui.state?.catalog?.some(entry=>String(entry.id)===String(taxon.id))),
   };
 }
@@ -1482,62 +1483,153 @@ async function openDefinition(id){
   }
 }
 
+function detailPathHtml(context){
+  const path=context?.path||[];
+  if(!path.length)return '<div class="phylo-path-empty">Phylogenetic path resolving…</div>';
+
+  return '<div class="phylo-path">'+path.map((node,index)=>
+    '<button data-detail-tree="'+esc(node.id)+'" data-detail-tree-rank="'+esc(node.rank||node.kind||"")+'">'+
+      '<span>'+esc(node.commonName||node.scientificName)+'</span>'+
+      '<small>'+esc(node.rank||node.kind||"")+'</small>'+
+    '</button>'+
+    (index<path.length-1?'<i>›</i>':"")
+  ).join("")+'</div>';
+}
+
+function detailMetric(label,value,extra=""){
+  return '<div class="record-metric"><small>'+esc(label)+'</small><b>'+esc(value||"—")+'</b>'+(extra?'<em>'+esc(extra)+'</em>':"")+'</div>';
+}
+
+function wireCardRecord(definition,card,context){
+  cardModalContent.querySelectorAll("[data-detail-tree]").forEach(button=>{
+    button.onclick=()=>{
+      const id=button.dataset.detailTree;
+      const node=(context?.path||[]).find(item=>String(item.id)===String(id))||context?.taxon||null;
+      cardModal.close();
+      ui.view="tree";
+      render();
+      queueMicrotask(()=>focusTree(id,node));
+    };
+  });
+
+  cardModalContent.querySelector("[data-explore-record]")?.addEventListener("click",()=>{
+    const target=context?.taxon;
+    if(!target)return;
+    cardModal.close();
+    ui.view="tree";
+    render();
+    queueMicrotask(()=>focusTree(target.id,target));
+  });
+}
+
 function renderCardModal(definition,card){
   const media=getMedia(definition);
   const knowledge=ui.knowledge.get(definition.id);
   const live=knowledge&&knowledge!==false?knowledge:null;
-  const summary=live?.wikipedia?.extract||definition.summary||"";
+  const context=taxonomyContextFor(definition);
+  const taxon=context?.taxon||null;
+  const summary=live?.wikipedia?.extract||definition.summary||"Scientific description not yet resolved.";
   const sourceLine=live?.sources?.length
     ? live.sources.join(" · ")
-    : (knowledge===false?"External scientific sources unavailable — local card data shown.":"Wikipedia / Wikidata / Lifemap resolving…");
+    : (knowledge===false
+      ?"External enrichment unavailable — local scientific snapshot shown."
+      :"Resolving Wikipedia, Wikidata and reusable media…");
   const taxId=live?.taxonomy?.ncbiTaxId||null;
   const displayName=(definition.commonName&&definition.commonName!==definition.scientificName)
     ? definition.commonName
     : (live?.wikipedia?.title||definition.commonName||definition.scientificName);
-  const colUrl=definition.source&&String(definition.source).includes("Catalogue of Life")
-    ? "https://www.catalogueoflife.org/data/taxon/"+encodeURIComponent(definition.taxonomyId||definition.id)
-    : null;
+
+  const colTaxonId=taxon?.sourceId||definition.taxonomyId||(
+    definition.source&&String(definition.source).includes("Catalogue of Life")?definition.id:null
+  );
+  const colUrl=colTaxonId
+    ?"https://www.catalogueoflife.org/data/taxon/"+encodeURIComponent(colTaxonId)
+    :null;
+
   const currentEdition=card?.edition||(
     definition.kind==="taxon"?"FOUNDATION I":
     definition.temporalStatus==="extinct"?"FOSSIL RECORD I":
-    definition.kind==="origin"?"ORIGIN":"WILD CENSUS I"
+    definition.kind==="origin"?"ORIGIN":"RESEARCH"
   );
   const supply=supplyFor(definition.id,currentEdition);
+  const rank=taxon?.rank||definition.rank||definition.kind||"unranked";
+  const speciesCount=Number(taxon?.descendantSpeciesCount||definition.descendantSpeciesCount||0);
+  const directChildren=Number(taxon?.childCount||definition.childCount||0);
+  const taxonomyReady=ui.taxonomyContext.has(String(definition.id));
+  const rarity=RARITY[definition.rarity]||{label:definition.rarity};
 
   cardModalContent.innerHTML=
-    '<div class="detail-layout">'+
-      '<div class="detail-card">'+(card?cardHtml(card,{interactive:false}):definitionPreview(definition))+'</div>'+
-      '<div class="detail-copy">'+
-        '<span class="eyebrow">'+esc(definition.kind)+' · '+esc(definition.rarity)+'</span>'+
-        '<h2>'+esc(displayName)+'</h2>'+
-        '<em>'+esc(definition.scientificName)+'</em>'+
-        '<p class="knowledge-extract">'+esc(summary)+'</p>'+
-        '<dl>'+
-          '<div><dt>Type</dt><dd>'+esc(definition.kind)+'</dd></div>'+
-          '<div><dt>Rank</dt><dd>'+esc(definition.rank||definition.temporalStatus||"—")+'</dd></div>'+
-          '<div><dt>Parent</dt><dd>'+esc(definition.parentId||"Origin")+'</dd></div>'+
-          (definition.conservation?'<div><dt>Conservation</dt><dd>'+esc(definition.conservation)+'</dd></div>':"")+
-          (taxId?'<div><dt>NCBI Taxonomy ID</dt><dd>'+esc(taxId)+'</dd></div>':"")+
-          (live?.wikidata?.id?'<div><dt>Wikidata</dt><dd>'+esc(live.wikidata.id)+'</dd></div>':"")+
-          (supply?'<div><dt>Issued supply</dt><dd>'+formatNumber(supply.issued)+(card?.serialCap?" / "+formatNumber(card.serialCap):"")+'</dd></div>':"")+
-        '</dl>'+
-        '<div class="source-actions">'+
-          (colUrl?'<a class="source-button col" href="'+esc(colUrl)+'" target="_blank" rel="noopener">Catalogue of Life ↗</a>':"")+
-          knowledgeSourceButtons(live)+
+    '<div class="scientific-record">'+
+      '<aside class="record-object">'+
+        '<div class="record-card-shell">'+(card?cardHtml(card,{interactive:false}):definitionPreview(definition))+'</div>'+
+        '<div class="record-provenance">'+
+          '<span class="eyebrow">COLLECTIBLE OBJECT</span>'+
+          (card
+            ?'<div class="provenance-grid">'+
+              detailMetric("Edition",card.edition)+
+              detailMetric("Serial",serial(card))+
+              detailMetric("Finish",card.finish)+
+              detailMetric("Rarity",rarity.label)+
+            '</div>'
+            :'<p>Reference view — no physical card instance selected.</p>')+
         '</div>'+
-        '<div class="source-meta"><span>'+esc(sourceLine)+'</span>'+
-          (media&&media.creator?'<small>Image: '+esc(media.creator)+' · '+esc(media.license||"")+'</small>':"")+
-        '</div>'+
-      '</div>'+
+      '</aside>'+
+      '<article class="record-sheet">'+
+        '<header class="record-header">'+
+          '<div><span class="eyebrow">'+esc(definition.kind)+' · '+esc(rank)+'</span><h2>'+esc(displayName)+'</h2><em>'+esc(definition.scientificName)+'</em></div>'+
+          '<div class="record-badges">'+
+            '<span class="rarity-record">'+esc(rarity.label)+'</span>'+
+            (definition.conservation?'<span>'+esc(definition.conservation)+'</span>':"")+
+            (definition.temporalStatus==="extinct"?'<span>Extinct</span>':"")+
+          '</div>'+
+        '</header>'+
+        '<section class="record-section phylogeny-section">'+
+          '<div class="record-section-title"><div><span class="eyebrow">PHYLOGENETIC LINEAGE</span><h3>Position in the Tree of Life</h3></div>'+
+            (taxon?'<button class="record-tree-action" data-explore-record>Explore branch →</button>':"")+
+          '</div>'+
+          detailPathHtml(context)+
+        '</section>'+
+        '<section class="record-metrics">'+
+          detailMetric("Rank",rank)+
+          detailMetric("Species in clade",speciesCount?formatNumber(speciesCount):(rank==="species"?"1":"—"))+
+          detailMetric("Direct branches",directChildren?formatNumber(directChildren):"—")+
+          detailMetric("Issued supply",supply?formatNumber(supply.issued):"—",card?.serialCap?"cap "+formatNumber(card.serialCap):"")+
+          (taxId?detailMetric("NCBI Taxonomy ID",taxId):"")+
+          (live?.wikidata?.id?detailMetric("Wikidata",live.wikidata.id):"")+
+        '</section>'+
+        '<section class="record-section record-description">'+
+          '<span class="eyebrow">SCIENTIFIC NOTE</span>'+
+          '<p class="knowledge-extract">'+esc(summary)+'</p>'+
+        '</section>'+
+        '<section class="record-section record-sources">'+
+          '<div class="record-section-title"><div><span class="eyebrow">TRACEABILITY</span><h3>Sources & provenance</h3></div></div>'+
+          '<div class="source-actions">'+
+            (colUrl?'<a class="source-button col" href="'+esc(colUrl)+'" target="_blank" rel="noopener">Catalogue of Life ↗</a>':"")+
+            knowledgeSourceButtons(live)+
+          '</div>'+
+          '<div class="source-meta">'+
+            '<span>'+esc(sourceLine)+'</span>'+
+            (definition.taxonomyRelease?'<small>Card taxonomy snapshot: '+esc(definition.taxonomyRelease)+'</small>':"")+
+            (context?.taxonomy?.release?'<small>Current map taxonomy: '+esc(context.taxonomy.release)+'</small>':"")+
+            (media&&media.creator?'<small>Image: '+esc(media.creator)+' · '+esc(media.license||"")+' · '+esc(media.source||"")+'</small>':"")+
+            (!taxonomyReady?'<small>Taxonomic lineage loading…</small>':"")+
+          '</div>'+
+        '</section>'+
+      '</article>'+
     '</div>';
+
+  wireCardRecord(definition,card,context);
+  wireMediaObservers();
 }
 
 function openCardModal(definition,card){
   renderCardModal(definition,card);
   cardModal.showModal();
+
   Promise.allSettled([
     loadKnowledge(definition),
     loadSupplies(definition.id),
+    loadTaxonomyContext(definition),
   ]).then(()=>{
     if(cardModal.open)renderCardModal(definition,card);
   });
