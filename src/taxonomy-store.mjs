@@ -19,6 +19,22 @@ function openFullDb() {
       fullDb = null;
       return null;
     }
+
+    let schemaVersion = 0;
+    try {
+      schemaVersion = Number(
+        fullDb.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()?.value || 0
+      );
+    } catch {
+      schemaVersion = 0;
+    }
+
+    if (schemaVersion < 4) {
+      fullDb.close();
+      fullDb = null;
+      return null;
+    }
+
     return fullDb;
   } catch {
     fullDb = null;
@@ -111,7 +127,7 @@ export function taxonomyStatus() {
       rootId: "animalia",
       mapRootId: "luca",
       source: "LifeCards seed catalog",
-      hint: "Run npm install && npm run sync:col to import Catalogue of Life Animalia.",
+      hint: "Run npm install && npm run sync:col to build or upgrade the Catalogue of Life Animalia database.",
     };
   }
   const dropPoolTable = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='drop_pool'").get();
