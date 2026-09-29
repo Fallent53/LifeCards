@@ -850,8 +850,8 @@ function renderMarket(){
   const search=document.getElementById("marketSearch");
   search?.addEventListener("input",event=>{
     ui.marketQuery=event.target.value;
-    clearTimeout(marketSearch._timer);
-    marketSearch._timer=setTimeout(()=>{
+    clearTimeout(search._timer);
+    search._timer=setTimeout(()=>{
       ui.marketData=null;
       loadMarketData({resetPage:true});
     },220);
