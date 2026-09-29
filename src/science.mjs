@@ -223,6 +223,61 @@ export async function fetchNcbi(definition, { fetchImpl = fetch } = {}) {
   return value;
 }
 
+export async function searchNcbiTaxa(query, { fetchImpl = fetch, limit = 10 } = {}) {
+  const term = String(query || "").trim();
+  if (term.length < 2) return [];
+
+  const normalizedLimit = Math.max(1, Math.min(20, Number(limit) || 10));
+  const cacheKey = `${term.toLowerCase()}:${normalizedLimit}`;
+  const cached = getExternalCache("ncbi-search", cacheKey);
+  if (cached) return cached.value;
+
+  const searchParams = new URLSearchParams({
+    db: "taxonomy",
+    term,
+    retmode: "json",
+    retmax: String(normalizedLimit),
+    tool: "lifecards",
+  });
+  if (process.env.NCBI_API_KEY) searchParams.set("api_key", process.env.NCBI_API_KEY);
+
+  const search = await fetchJson(
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${searchParams}`,
+    { fetchImpl }
+  );
+  const ids = search?.esearchresult?.idlist || [];
+  if (!ids.length) {
+    setExternalCache("ncbi-search", cacheKey, [], 6 * 60 * 60 * 1000);
+    return [];
+  }
+
+  const summaryParams = new URLSearchParams({
+    db: "taxonomy",
+    id: ids.join(","),
+    retmode: "json",
+    tool: "lifecards",
+  });
+  if (process.env.NCBI_API_KEY) summaryParams.set("api_key", process.env.NCBI_API_KEY);
+
+  const summary = await fetchJson(
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?${summaryParams}`,
+    { fetchImpl }
+  );
+
+  const results = ids.map((id) => {
+    const record = parseNcbiSummary(summary, id);
+    if (!record) return null;
+    return {
+      ...record,
+      lifemapUrl: lifemapUrl(id),
+      ncbiUrl: ncbiTaxonomyUrl(id),
+    };
+  }).filter(Boolean);
+
+  setExternalCache("ncbi-search", cacheKey, results, 24 * 60 * 60 * 1000);
+  return results;
+}
+
 export async function getScientificEnrichment(definitionId, { lang = "en", fetchImpl = fetch } = {}) {
   const definition = byId.get(definitionId);
   if (!definition) throw new Error("Unknown card definition");
