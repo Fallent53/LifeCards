@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
-const CACHE_SCHEMA_VERSION = "v10";
+const CACHE_SCHEMA_VERSION = "v11";
 const cache = new Map();
 const knowledgeDbPath = resolve(process.env.LIFECARDS_KNOWLEDGE_DB || "./data/knowledge.sqlite");
 mkdirSync(dirname(knowledgeDbPath), { recursive: true });
@@ -315,7 +315,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
     try{
       const supplemental=await searchSupplementalRealMedia(
         taxonName||normalized,
-        {rank:looksLikeSpecies?"species":""}
+        {rank:looksLikeSpecies?"species":"",extinct:false}
       );
       if(supplemental){
         bestCandidate=chooseBestMediaCandidate([
@@ -530,7 +530,12 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
     const query=String(entry?.query??"").trim();
     if(!id||!query||seen.has(id))continue;
     seen.add(id);
-    normalized.push({id,query,rank:String(entry?.rank||"")});
+    normalized.push({
+      id,
+      query,
+      rank:String(entry?.rank||""),
+      extinct:Boolean(entry?.extinct),
+    });
   }
   if(!normalized.length)return {};
 
@@ -696,7 +701,10 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
   // results for the remaining rows.
   for(const entry of fallback){
     try{
-      const media=await searchSupplementalRealMedia(entry.query,{rank:entry.rank});
+      const media=await searchSupplementalRealMedia(entry.query,{
+        rank:entry.rank,
+        extinct:entry.extinct,
+      });
       output[entry.id]=media?{
         query:entry.query,
         wikipedia:null,
