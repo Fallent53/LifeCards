@@ -8,10 +8,16 @@
     "dev": "node --watch server.mjs",
     "start": "node server.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check server.mjs && node --check src/game-engine.mjs && node --check src/database.mjs && node --check public/app.js",
-    "sync:knowledge": "node scripts/sync-knowledge.mjs"
+    "check": "node --check server.mjs && node --check src/game-engine.mjs && node --check src/database.mjs && node --check src/taxonomy-store.mjs && node --check src/knowledge.mjs && node --check public/app.js && node --check public/radial-tree.js",
+    "sync:knowledge": "node scripts/sync-knowledge.mjs",
+    "sync:col": "node scripts/sync-col.mjs --scope Animalia",
+    "sync:col:all": "node scripts/sync-col.mjs --scope all --output ./data/life.sqlite"
   },
   "engines": {
     "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "csv-parse": "^6.1.0",
+    "unzipper": "^0.12.3"
   }
 }
