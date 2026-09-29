@@ -110,7 +110,7 @@ export class RadialTreeMap {
           <circle class="radial-node-halo" r="${major ? 17 : 11}"></circle>
           <circle class="radial-node-dot" r="${major ? 6 : 4}"></circle>
           <text class="radial-node-label" x="${p.x >= 0 ? 13 : -13}" y="-2" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(label)}</text>
-          <text class="radial-node-rank" x="${p.x >= 0 ? 13 : -13}" y="10" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(rank)}${truncated ? ` · +${truncated}` : ""}</text>
+          <text class="radial-node-rank" x="${p.x >= 0 ? 13 : -13}" y="10" text-anchor="${p.x >= 0 ? "start" : "end"}">${escapeHtml(rank)}${visibleChildren ? ` · ${visibleChildren.toLocaleString()}↘` : ""}${truncated ? ` · +${truncated}` : ""}</text>
         </g>`;
     }).join("");
 
@@ -247,5 +247,8 @@ export class RadialTreeMap {
     if (!this.group) return;
     this.group.style.transformOrigin = "center";
     this.group.style.transform = `translate(${this.x}px, ${this.y}px) scale(${this.scale})`;
+    if (this.svg) {
+      this.svg.dataset.zoom = this.scale < 0.72 ? "far" : this.scale < 1.25 ? "mid" : "near";
+    }
   }
 }
