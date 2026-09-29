@@ -59,6 +59,15 @@ export function migrate() {
       FOREIGN KEY(buyer_id) REFERENCES users(id)
     );
     CREATE INDEX IF NOT EXISTS listings_status_idx ON listings(status, created_at DESC);
+    CREATE TABLE IF NOT EXISTS external_cache (
+      provider TEXT NOT NULL,
+      cache_key TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      fetched_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (provider, cache_key)
+    );
+    CREATE INDEX IF NOT EXISTS external_cache_expiry_idx ON external_cache(expires_at);
   `);
 }
 
@@ -280,6 +289,50 @@ export function seedDemoMarket() {
     db.exec("ROLLBACK");
     throw error;
   }
+}
+
+export function getExternalCache(provider, cacheKey) {
+  migrate();
+  const row = db.prepare(
+    "SELECT payload, fetched_at, expires_at FROM external_cache WHERE provider = ? AND cache_key = ?"
+  ).get(provider, cacheKey);
+  if (!row) return null;
+
+  if (Number(row.expires_at) <= nowMs()) {
+    db.prepare("DELETE FROM external_cache WHERE provider = ? AND cache_key = ?").run(provider, cacheKey);
+    return null;
+  }
+
+  try {
+    return {
+      value: JSON.parse(row.payload),
+      fetchedAt: Number(row.fetched_at),
+      expiresAt: Number(row.expires_at),
+    };
+  } catch {
+    db.prepare("DELETE FROM external_cache WHERE provider = ? AND cache_key = ?").run(provider, cacheKey);
+    return null;
+  }
+}
+
+export function setExternalCache(provider, cacheKey, value, ttlMs) {
+  migrate();
+  const fetchedAt = nowMs();
+  const expiresAt = fetchedAt + Math.max(1_000, Number(ttlMs) || 0);
+  db.prepare(`
+    INSERT INTO external_cache (provider, cache_key, payload, fetched_at, expires_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(provider, cache_key) DO UPDATE SET
+      payload = excluded.payload,
+      fetched_at = excluded.fetched_at,
+      expires_at = excluded.expires_at
+  `).run(provider, cacheKey, JSON.stringify(value), fetchedAt, expiresAt);
+  return value;
+}
+
+export function purgeExpiredExternalCache() {
+  migrate();
+  return db.prepare("DELETE FROM external_cache WHERE expires_at <= ?").run(nowMs());
 }
 
 export function resetForTests() {
