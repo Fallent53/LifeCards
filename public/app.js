@@ -896,41 +896,72 @@ function renderMarket(){
   const data=ui.marketData;
   const listings=data?.items||[];
   const marketFilters=["ALL","HOLO","WILD","FOSSIL","TAXA"];
+  const scopes=[
+    {id:"MARKET",label:"Market"},
+    {id:"MINE",label:"My listings"},
+    {id:"HISTORY",label:"History"},
+  ];
   const total=data?.total||0;
-  const globalTotal=data?.activeTotal||total;
+  const globalTotal=data?.activeTotal||0;
+  const myActiveTotal=data?.myActiveTotal||0;
   const start=total?ui.marketPage*ui.marketPageSize+1:0;
   const end=Math.min(total,(ui.marketPage+1)*ui.marketPageSize);
   const pages=Math.max(1,Math.ceil(total/ui.marketPageSize));
+  const historyMode=ui.marketScope==="HISTORY";
+
+  const emptyMessage=
+    ui.marketScope==="MINE"
+      ?"You have no active listings matching these filters."
+      :historyMode
+        ?"No completed or cancelled listings match this view."
+        :"No listings match this search.";
 
   main.innerHTML=
     '<section class="market-page scalable-market">'+
       '<div class="market-hero">'+
-        '<div><span class="eyebrow">SECONDARY MARKET</span><h1>Exchange</h1><p>Collect editions, serials and finishes. Fixed-price trades use Coins; 5% leaves the economy on each completed sale.</p></div>'+
-        '<div class="market-stat"><b>'+formatNumber(globalTotal)+'</b><small>active listings</small></div>'+
+        '<div><span class="eyebrow">SECONDARY MARKET</span><h1>Exchange</h1><p>Collect editions, serials and finishes. Fixed-price trades use Coins; every recognized sale becomes part of that card’s provenance.</p></div>'+
+        '<div class="market-stat"><b>'+formatNumber(globalTotal)+'</b><small>active listings</small><em>'+formatNumber(myActiveTotal)+' yours</em></div>'+
+      '</div>'+
+      '<div class="market-scope-tabs">'+
+        scopes.map(scope=>'<button data-market-scope="'+scope.id+'" class="'+(ui.marketScope===scope.id?"active":"")+'">'+scope.label+(scope.id==="MINE"&&myActiveTotal?' <i>'+formatNumber(myActiveTotal)+'</i>':"")+'</button>').join("")+
       '</div>'+
       '<div class="market-search-row">'+
         '<label class="search-box"><span>⌕</span><input id="marketSearch" placeholder="Search species or taxon…" value="'+esc(ui.marketQuery)+'"></label>'+
         '<div class="market-sort">'+
-          '<button data-market-sort="NEWEST" class="'+(ui.marketSort==="NEWEST"?"active":"")+'">Newest</button>'+
+          '<button data-market-sort="NEWEST" class="'+(ui.marketSort==="NEWEST"?"active":"")+'">'+(historyMode?"Recent":"Newest")+'</button>'+
           '<button data-market-sort="PRICE_ASC" class="'+(ui.marketSort==="PRICE_ASC"?"active":"")+'">Price ↑</button>'+
           '<button data-market-sort="PRICE_DESC" class="'+(ui.marketSort==="PRICE_DESC"?"active":"")+'">Price ↓</button>'+
         '</div>'+
       '</div>'+
       '<div class="market-toolbar">'+
-        '<span>'+(ui.marketLoading?"Loading…":(start?start+"–"+end+" of "+formatNumber(total):"0 listings"))+'</span>'+
+        '<span>'+(ui.marketLoading?"Loading…":(start?start+"–"+end+" of "+formatNumber(total):"0 results"))+'</span>'+
         '<div>'+marketFilters.map(filter=>'<button class="filter-chip '+(ui.marketFilter===filter?"active":"")+'" data-market-filter="'+filter+'">'+filter+'</button>').join("")+'</div>'+
       '</div>'+
       '<div class="market-grid '+(ui.marketLoading?"is-loading":"")+'">'+
         (ui.marketLoading&&!listings.length
           ?Array.from({length:8},()=>'<div class="market-card-skeleton"></div>').join("")
-          :(listings.length?listings.map(listing=>
-            '<article class="market-item '+(listing.sellerId===ui.state.user.id?"own-listing":"")+'">'+cardHtml(listing.card,{compact:true})+
-            '<div class="market-meta"><div><small>'+(listing.sellerId===ui.state.user.id?"YOUR ASK":"ASK")+'</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(listing.sellerId)+'</span></div>'+
-            (listing.sellerId===ui.state.user.id
-              ?'<button class="cancel-listing" data-cancel-listing="'+esc(listing.id)+'">Cancel</button>'
-              :'<button data-buy="'+esc(listing.id)+'">Buy</button>')+
-            '</div></article>'
-          ).join(""):'<div class="empty-state">No listings match this search.</div>'))+
+          :(listings.length?listings.map(listing=>{
+            const mine=listing.sellerId===ui.state.user.id;
+            const boughtByMe=listing.buyerId===ui.state.user.id;
+            const status=String(listing.status||"ACTIVE").toUpperCase();
+            const metaLabel=historyMode
+              ?(status==="SOLD"?(mine?"SOLD":"BOUGHT"):"CANCELLED")
+              :(mine?"YOUR ASK":"ASK");
+            const actorLine=historyMode
+              ?(status==="SOLD"
+                ?(mine?"to "+(listing.buyerId||"unknown buyer"):"from "+listing.sellerId)
+                :"listing withdrawn")
+              :listing.sellerId;
+            const action=historyMode
+              ?'<span class="market-status '+status.toLowerCase()+'">'+status+'</span>'
+              :(mine
+                ?'<button class="cancel-listing" data-cancel-listing="'+esc(listing.id)+'">Cancel</button>'
+                :'<button data-buy="'+esc(listing.id)+'">Buy</button>');
+            return '<article class="market-item '+(mine?"own-listing ":"")+(historyMode?"history-item ":"")+'" data-market-card="'+esc(listing.id)+'">'+
+              cardHtml(listing.card,{compact:true})+
+              '<div class="market-meta"><div><small>'+metaLabel+'</small><strong>◆ '+formatNumber(listing.price)+'</strong><span>'+esc(actorLine)+'</span></div>'+action+'</div>'+
+            '</article>';
+          }).join(""):'<div class="empty-state">'+emptyMessage+'</div>'))+
       '</div>'+
       '<div class="collection-pagination market-pagination">'+
         '<button id="marketPrev" '+(ui.marketPage<=0?"disabled":"")+'>← Previous</button>'+
@@ -938,6 +969,20 @@ function renderMarket(){
         '<button id="marketNext" '+(!(data?.hasMore)?"disabled":"")+'>Next →</button>'+
       '</div>'+
     '</section>';
+
+  document.querySelectorAll("[data-market-scope]").forEach(button=>button.onclick=()=>{
+    ui.marketScope=button.dataset.marketScope;
+    ui.marketData=null;
+    ui.marketQuery="";
+    ui.marketFilter="ALL";
+    loadMarketData({resetPage:true});
+  });
+
+  document.querySelectorAll("[data-market-card]").forEach(item=>item.onclick=event=>{
+    if(event.target.closest("button"))return;
+    const listing=listings.find(entry=>String(entry.id)===String(item.dataset.marketCard));
+    if(listing)openCardModal(listing.card.definition,listing.card);
+  });
 
   document.querySelectorAll("[data-buy]").forEach(button=>button.onclick=event=>{
     event.stopPropagation();
@@ -1579,6 +1624,23 @@ function detailPathHtml(context){
   ).join("")+'</div>';
 }
 
+function provenanceTimelineHtml(card){
+  if(!card)return "";
+  const provenance=provenanceFor(card.id);
+  if(!provenance){
+    return '<div class="provenance-loading">Official transfer history resolving…</div>';
+  }
+  const events=provenance.events||[];
+  return '<div class="provenance-timeline">'+events.map((event,index)=>{
+    const date=event.at?new Date(event.at).toLocaleString():"Unknown date";
+    if(event.type==="ISSUED"){
+      return '<div class="provenance-event issued"><i></i><div><span>ISSUED</span><b>'+esc(event.ownerId||"Unknown discoverer")+'</b><small>'+esc(date)+' · '+esc(event.edition||card.edition)+' · '+esc(serial(card))+'</small></div></div>';
+    }
+    return '<div class="provenance-event sold"><i></i><div><span>OFFICIAL SALE</span><b>'+esc(event.sellerId||"Unknown")+' → '+esc(event.buyerId||"Unknown")+'</b><small>'+esc(date)+' · ◆ '+formatNumber(event.price||0)+'</small></div></div>';
+  }).join("")+'</div>'+
+  '<div class="provenance-current"><span>CURRENT KEEPER</span><b>'+esc(provenance.currentOwnerId||card.ownerId||"Unknown")+'</b><small>'+formatNumber(provenance.transferCount||0)+' recognized transfer'+(Number(provenance.transferCount||0)===1?"":"s")+'</small></div>';
+}
+
 function detailMetric(label,value,extra=""){
   return '<div class="record-metric"><small>'+esc(label)+'</small><b>'+esc(value||"—")+'</b>'+(extra?'<em>'+esc(extra)+'</em>':"")+'</div>';
 }
@@ -1653,7 +1715,8 @@ function renderCardModal(definition,card){
               detailMetric("Serial",serial(card))+
               detailMetric("Finish",card.finish)+
               detailMetric("Rarity",rarity.label)+
-            '</div>'
+            '</div>'+
+            '<div class="record-transfer-history"><span class="eyebrow">OFFICIAL PROVENANCE</span>'+provenanceTimelineHtml(card)+'</div>'
             :'<p>Reference view — no physical card instance selected.</p>')+
         '</div>'+
       '</aside>'+
@@ -1713,6 +1776,7 @@ function openCardModal(definition,card){
     loadKnowledge(definition),
     loadSupplies(definition.id),
     loadTaxonomyContext(definition),
+    card?loadProvenance(card.id):Promise.resolve(),
   ]).then(()=>{
     if(cardModal.open)renderCardModal(definition,card);
   });
