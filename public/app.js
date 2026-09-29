@@ -230,7 +230,7 @@ function renderPacks(){
         '<span class="eyebrow">EXPEDITION SUPPLY</span>'+
         '<h1>Open the living world.</h1>'+
         '<p>Six discoveries per pack. Species, extinct life and phylogenetic nodes all share the same Tree of Life.</p>'+
-        '<div class="pack-rules"><span>6 cards</span><span>1 pack / 8 min</span><span>8 stored max</span><span>'+Math.round(config.holoRate*1000)/10+'% Holo</span></div>'+
+        '<div class="pack-rules"><span>6 cards</span><span>1 pack / 8 min</span><span>8 stored max</span><span>'+Math.round(config.holoRate*1000)/10+'% Holo</span><span>Audit #'+formatNumber(ui.state.audit?.count||0)+'</span></div>'+
       '</div>'+
       '<div class="pack-stage">'+
         '<div class="ambient-ring ring-one"></div><div class="ambient-ring ring-two"></div>'+
@@ -389,7 +389,7 @@ function renderProfile(){
       '<div class="profile-hero">'+
         '<div class="profile-avatar">E</div>'+
         '<div><span class="eyebrow">FIELD RESEARCHER</span><h1>Explorer</h1><p>Collector, taxonomist and keeper of a growing Tree of Life archive.</p></div>'+
-        '<div class="profile-level"><small>KNOWLEDGE</small><b>'+formatNumber(p.knowledge.points)+'</b><span>'+p.knowledge.correctAnswers+' correct · '+Math.round(p.knowledge.accuracy*100)+'% accuracy</span></div>'+
+        ''<div class="profile-level"><small>KNOWLEDGE</small><b>'+formatNumber(p.knowledge.points)+'</b><span>'+p.knowledge.correctAnswers+' correct · '+Math.round(p.knowledge.accuracy*100)+'% accuracy · '+formatNumber(ui.state.audit?.count||0)+' audited packs</span></div>'+
       '</div>'+
       '<div class="profile-stats">'+
         '<article><span>Total cards</span><b>'+formatNumber(p.totalCards)+'</b></article>'+
@@ -511,7 +511,7 @@ async function openPack(){
       '</div>';
     document.querySelector("[data-close-reveal]")?.addEventListener("click",()=>revealDialog.close());
     const result=await api("/api/packs/open",{method:"POST",body:"{}"});
-    ui.reveal={cards:result.cards,originCard:result.originCard};
+    ui.reveal={cards:result.cards,originCard:result.originCard,audit:result.audit||null};
     ui.revealIndex=0;
     setTimeout(()=>renderReveal(),420);
     warmMedia(result.cards.map(c=>c.definition),{rerender:false}).then(()=>{
@@ -541,6 +541,7 @@ function renderReveal(){
       '<div class="single-card-wrap enter">'+cardHtml(card,{interactive:false})+'</div>'+
       '<div class="reveal-dots">'+ui.reveal.cards.map((_,i)=>'<i class="'+(i<=ui.revealIndex&&!isOrigin?"active":"")+'"></i>').join("")+(hasOrigin?'<i class="origin-dot '+(isOrigin?"active":"")+'"></i>':"")+'</div>'+
       '<button class="reveal-next" id="revealNext">'+(final?"Continue":(isOrigin?"Continue":lastNormal&&hasOrigin?"Reveal anomaly":"Next card · "+(ui.reveal.cards.length-normalIndex)+" left"))+'</button>'+
+      (ui.reveal.audit?'<div class="audit-stamp"><span>PACK PROVENANCE</span><code>'+esc(ui.reveal.audit.auditHash.slice(0,16))+'…</code></div>':"")+
     '</div>';
   document.querySelector("[data-close-reveal]")?.addEventListener("click",finishReveal);
   document.getElementById("revealNext").onclick=()=>{
