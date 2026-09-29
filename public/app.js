@@ -1096,7 +1096,15 @@ async function buy(listingId){
 }
 
 async function refresh(shouldRender=true){
+  const previousCollectionTotal=ui.state?.collectionSummary?.totalCards;
   ui.state=await api("/api/state");
+  if(
+    ui.collectionData &&
+    previousCollectionTotal!=null &&
+    ui.state.collectionSummary?.totalCards!==previousCollectionTotal
+  ){
+    ui.collectionData=null;
+  }
   if(ui.view==="collection"&&!ui.collectionData&&!ui.collectionLoading){
     queueMicrotask(()=>loadCollectionData({resetPage:true}));
   }
