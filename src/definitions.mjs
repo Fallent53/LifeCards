@@ -44,6 +44,33 @@ function iconForRank(rank, kind) {
   return "◎";
 }
 
+function cleanTaxonLabel(value, rank = "") {
+  const text=String(value||"").replace(/\s+/g," ").trim();
+  if(!text)return text;
+
+  const r=String(rank||"").toLowerCase();
+  const hasAuthority=/\b(?:17|18|19|20)\d{2}\b/.test(text);
+  if(!hasAuthority)return text;
+
+  if(["species"].includes(r)){
+    const match=text.match(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+(?:\s+\([A-ZÀ-ÖØ-Þ][\p{L}.-]+\))?\s+[a-zà-öø-ÿ][\p{L}.-]+)/u);
+    if(match)return match[1];
+  }
+
+  if(["subspecies","variety","subvariety","form","subform"].includes(r)){
+    const match=text.match(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+(?:\s+\([A-ZÀ-ÖØ-Þ][\p{L}.-]+\))?\s+[a-zà-öø-ÿ][\p{L}.-]+(?:\s+(?:subsp\.|ssp\.|var\.|f\.)?\s*[a-zà-öø-ÿ][\p{L}.-]+)?)/u);
+    if(match)return match[1];
+  }
+
+  if(["genus","subgenus"].includes(r)){
+    const match=text.match(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+(?:\s+\([A-ZÀ-ÖØ-Þ][\p{L}.-]+\))?)/u);
+    if(match)return match[1];
+  }
+
+  const first=text.match(/^([A-ZÀ-ÖØ-Þ][\p{L}.-]+)/u);
+  return first?.[1]||text;
+}
+
 export function definitionFromTaxon(taxon) {
   if (!taxon) return null;
 
@@ -53,7 +80,12 @@ export function definitionFromTaxon(taxon) {
 
   const kind = taxon.kind || (String(taxon.rank).toLowerCase() === "species" ? "species" : "taxon");
   const scientificName = taxon.scientificName || taxon.canonicalName || "Unknown taxon";
-  const commonName = curated?.commonName || taxon.commonName || taxon.canonicalName || scientificName;
+  const canonicalName = cleanTaxonLabel(taxon.canonicalName || scientificName, taxon.rank);
+  const rawCommonName = String(taxon.commonName || "").trim();
+  const commonName = curated?.commonName ||
+    (rawCommonName && rawCommonName.toLowerCase() !== String(taxon.scientificName||"").toLowerCase()
+      ? cleanTaxonLabel(rawCommonName,taxon.rank)
+      : canonicalName);
   const rarity = curated?.rarity || taxon.gameRarity || rarityForRank(taxon.rank);
   const taxonomy = taxonomyStatus();
 
@@ -64,7 +96,7 @@ export function definitionFromTaxon(taxon) {
     curatedDefinitionId: curated?.id || null,
     kind,
     scientificName,
-    canonicalName: taxon.canonicalName || scientificName,
+    canonicalName,
     commonName,
     parentId: taxon.parentId ? String(taxon.parentId) : null,
     rank: taxon.rank || (kind === "species" ? "species" : "unranked"),
@@ -74,7 +106,7 @@ export function definitionFromTaxon(taxon) {
     editionCap: curated?.editionCap ?? (kind === "taxon" ? taxonEditionCap(taxon.rank) : 0),
     icon: curated?.icon || iconForRank(taxon.rank, kind),
     conservation: curated?.conservation || null,
-    mediaQuery: curated?.mediaQuery || taxon.canonicalName || scientificName,
+    mediaQuery: curated?.mediaQuery || canonicalName || scientificName,
     summary: curated?.summary || (
       kind === "species"
         ? "Catalogue of Life species. Scientific details and media are resolved lazily when viewed."
