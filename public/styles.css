@@ -205,3 +205,13 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
 .origin-beacon small{display:block;color:#a988d8;font-size:7px;letter-spacing:.13em}.origin-beacon b{display:block;margin-top:2px;font-size:9px}
 .origin-beacon:hover{border-color:#a886d9;box-shadow:0 0 28px #8964c524}
 @media(max-width:1000px){.tree-head-actions{width:100%;min-width:0}.origin-beacon{width:100%}}
+
+.radial-map-svg[data-zoom="far"] .radial-node.priority-low .radial-node-label,
+.radial-map-svg[data-zoom="far"] .radial-node.priority-low .radial-node-rank,
+.radial-map-svg[data-zoom="far"] .radial-node.priority-medium .radial-node-rank{opacity:0}
+.radial-map-svg[data-zoom="far"] .radial-node.priority-medium .radial-node-label{opacity:.68}
+.radial-map-svg[data-zoom="mid"] .radial-node.priority-low .radial-node-rank{opacity:0}
+.radial-map-svg[data-zoom="mid"] .radial-node.priority-low .radial-node-label{opacity:.55}
+.radial-map-svg[data-zoom="near"] .radial-node .radial-node-label{opacity:1}
+.radial-map-svg[data-zoom="near"] .radial-node .radial-node-rank{opacity:.82}
+.radial-node-label,.radial-node-rank{transition:opacity .16s}
