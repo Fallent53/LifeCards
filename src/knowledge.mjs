@@ -1,4 +1,4 @@
-import { searchCommonsImage } from "./media.mjs";
+import { getCommonsFileMetadata, searchCommonsImage } from "./media.mjs";
 
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const cache = new Map();
@@ -108,7 +108,8 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
 
   let media = null;
   try {
-    media = await searchCommonsImage(taxonName);
+    if (page?.pageimage) media = await getCommonsFileMetadata(page.pageimage);
+    if (!media) media = await searchCommonsImage(taxonName);
   } catch {
     media = null;
   }
