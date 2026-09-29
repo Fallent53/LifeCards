@@ -497,7 +497,9 @@ function renderCardModal(definition,card){
   const knowledge=ui.knowledge.get(definition.id);
   const live=knowledge&&knowledge!==false?knowledge:null;
   const summary=live?.wikipedia?.extract||definition.summary||"";
-  const sourceLine=live?.sources?.length?live.sources.join(" · "):"Wikipedia / Wikidata / Lifemap resolving…";
+  const sourceLine=live?.sources?.length
+    ? live.sources.join(" · ")
+    : (knowledge===false?"External scientific sources unavailable — local card data shown.":"Wikipedia / Wikidata / Lifemap resolving…");
   const taxId=live?.taxonomy?.ncbiTaxId||null;
   const currentEdition=card?.edition||(
     definition.kind==="taxon"?"FOUNDATION I":
