@@ -26,6 +26,7 @@ const ui={
   treeSearchResults:[],
   treePayload:null,
   treeTargetId:null,
+  treeExpandedRoots:new Set(),
   taxonomyStatus:null,
   favorites:new Set(JSON.parse(localStorage.getItem("lifecards:favorites")||"[]")),
   reveal:null,
@@ -719,21 +720,29 @@ function findTreeNode(root,id){
   return null;
 }
 
-function treeLoadProfile(node){
+function treeLoadProfile(node,rootId){
   const rank=String(node?.rank||node?.kind||"").toLowerCase();
+  let profile;
   if(["origin","domain","kingdom"].includes(rank)){
-    return {depth:3,childLimit:30,nodeLimit:520};
+    profile={depth:3,childLimit:30,nodeLimit:520};
+  }else if(["phylum","subphylum","class","subclass"].includes(rank)){
+    profile={depth:4,childLimit:42,nodeLimit:760};
+  }else if(["order","suborder","family","subfamily","superfamily"].includes(rank)){
+    profile={depth:5,childLimit:54,nodeLimit:980};
+  }else if(["genus","subgenus"].includes(rank)){
+    profile={depth:4,childLimit:72,nodeLimit:760};
+  }else{
+    profile={depth:4,childLimit:42,nodeLimit:760};
   }
-  if(["phylum","subphylum","class","subclass"].includes(rank)){
-    return {depth:4,childLimit:42,nodeLimit:760};
+
+  if(ui.treeExpandedRoots.has(String(rootId||node?.id||""))){
+    profile={
+      depth:profile.depth,
+      childLimit:Math.min(160,Math.max(profile.childLimit*2,100)),
+      nodeLimit:Math.min(1700,Math.round(profile.nodeLimit*1.55)),
+    };
   }
-  if(["order","suborder","family","subfamily","superfamily"].includes(rank)){
-    return {depth:5,childLimit:54,nodeLimit:980};
-  }
-  if(["genus","subgenus"].includes(rank)){
-    return {depth:4,childLimit:72,nodeLimit:760};
-  }
-  return {depth:4,childLimit:42,nodeLimit:760};
+  return profile;
 }
 
 function treeNodeHint(id){
@@ -746,7 +755,7 @@ function treeNodeHint(id){
 }
 
 async function loadTreePayload(rootId,hintNode=null){
-  const profile=treeLoadProfile(hintNode||treeNodeHint(rootId));
+  const profile=treeLoadProfile(hintNode||treeNodeHint(rootId),rootId);
   const params=new URLSearchParams({
     depth:String(profile.depth),
     childLimit:String(profile.childLimit),
@@ -815,6 +824,10 @@ function drawRadialTree(payload){
     onFocus:(node)=>focusTree(node.id,node),
     onSelect:(node)=>openTaxonomyNode(node),
     onHome:()=>focusTree(payload.status?.mapRootId||ui.taxonomyStatus?.mapRootId||"luca",{rank:"origin"}),
+    onMore:(node)=>{
+      ui.treeExpandedRoots.add(String(node.id));
+      focusTree(node.id,node);
+    },
     onUp:(current)=>{
       const path=current?.path||[];
       const parent=path.length>1?path[path.length-2]:null;
