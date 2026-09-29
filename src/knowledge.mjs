@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
+import { getCommonsFileMetadata, getCommonsFilesMetadataBatch, getWikipediaFileMetadata, getWikipediaFilesMetadataBatch, hasCompleteAttribution, isLikelyPhotographicMedia, normalizeMediaFileKey, wikipediaThumbnailFallback, searchCommonsImage, searchGbifImage, searchSupplementalRealMedia } from "./media.mjs";
 
 const CACHE_TTL_MS = Number(process.env.LIFECARDS_KNOWLEDGE_CACHE_TTL_MS || 90 * 24 * 60 * 60 * 1000);
 const CACHE_SCHEMA_VERSION = "v13";
@@ -104,7 +104,6 @@ async function wikipediaPage(query, lang = "en") {
     exintro: "1",
     explaintext: "1",
     piprop: "thumbnail|name|original",
-    pilicense: "free",
     pithumbsize: "1200",
     wbptterms: "description",
     inprop: "url",
@@ -164,24 +163,30 @@ export function ncbiUrlForTaxId(taxId) {
 }
 
 function mediaCandidateScore(media, confidence = "LOW", resolver = "") {
-  if(!media?.imageUrl)return -1;
+  if(!media?.imageUrl||!isLikelyPhotographicMedia(media))return -1;
   let score=0;
-  if(hasCompleteAttribution(media))score+=100;
 
   const level=String(confidence||"LOW").toUpperCase();
-  if(level==="HIGH")score+=40;
-  else if(level==="MEDIUM")score+=20;
+  if(level==="HIGH")score+=50;
+  else if(level==="MEDIUM")score+=30;
+  else score+=10;
+
+  const match=String(media.mediaMatch||"").toUpperCase();
+  if(match.includes("EXACT"))score+=70;
+  else if(match.includes("REPRESENTATIVE")||match.includes("DESCENDANT"))score+=25;
+  if(media.exactTaxonIdentity)score+=60;
 
   const name=String(resolver||media?.resolver||"").toLowerCase();
-  if(name.includes("inaturalist-exact-wild"))score+=90;
-  else if(name.includes("gbif-exact-field")||name.includes("gbif-accepted-field"))score+=80;
-  else if(name.includes("inaturalist-taxon-representative"))score+=70;
-  else if(name.startsWith("wikipedia-pageimage"))score+=35;
-  else if(name.startsWith("wikidata-p18"))score+=30;
-  else if(name.startsWith("gbif"))score+=20;
-  else if(name.startsWith("commons"))score+=15;
-  else if(name.startsWith("idigbio"))score+=5;
+  if(name.startsWith("wikipedia-pageimage"))score+=55;
+  else if(name.startsWith("wikidata-p18"))score+=50;
+  else if(name.includes("inaturalist-exact"))score+=45;
+  else if(name.startsWith("commons"))score+=35;
+  else if(name.startsWith("gbif"))score+=30;
+  else if(name.includes("representative"))score+=20;
+  else if(name.startsWith("idigbio"))score+=10;
 
+  // Attribution is retained as useful metadata, but never blocks prototype coverage.
+  if(hasCompleteAttribution(media))score+=2;
   return score;
 }
 
@@ -309,7 +314,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
       if(
         bestCandidate &&
         String(bestCandidate.confidence).toUpperCase()==="HIGH" &&
-        hasCompleteAttribution(bestCandidate.media)
+        isLikelyPhotographicMedia(bestCandidate.media)
       ) break;
     } catch {
       // A failed provider must not prevent the next fallback.
@@ -319,7 +324,7 @@ export async function getKnowledge(query, { lang = "en" } = {}) {
   if(
     !bestCandidate ||
     String(bestCandidate.confidence||"").toUpperCase()!=="HIGH" ||
-    !hasCompleteAttribution(bestCandidate.media)
+    !isLikelyPhotographicMedia(bestCandidate.media)
   ){
     try{
       const supplemental=await searchSupplementalRealMedia(
@@ -453,7 +458,6 @@ async function wikipediaPagesBatch(entries,{lang="en"}={}){
       prop:"pageimages|pageprops|info",
       titles:chunk.join("|"),
       piprop:"thumbnail|name|original",
-      pilicense:"free",
       pithumbsize:"1200",
       inprop:"url",
       maxlag:"5",
@@ -675,7 +679,7 @@ export async function getAuditKnowledgeBatch(entries,{lang="en"}={}){
       };
     }
 
-    if(media&&hasCompleteAttribution(media)){
+    if(media?.imageUrl&&isLikelyPhotographicMedia(media)){
       const value={
         query:entry.query,
         wikipedia:page?{
@@ -790,7 +794,7 @@ async function wikimediaArticleMediaForLanguage(entries,{lang="en"}={}){
       local ||
       wikipediaThumbnailFallback(page,lang);
 
-    if(!media?.imageUrl)continue;
+    if(!media?.imageUrl||!isLikelyPhotographicMedia(media))continue;
 
     const confidence=exactTaxonIdentity?"HIGH":"MEDIUM";
     const value={
@@ -819,13 +823,12 @@ async function wikimediaArticleMediaForLanguage(entries,{lang="en"}={}){
       },
       media:{
         ...media,
-        resolver:"wikipedia-pageimage-free",
+        resolver:"wikipedia-pageimage",
         confidence,
         exactTaxonIdentity,
         exactWikipediaTitle:exactTitle,
         wikipediaMatch:page?._lifecardsMatch||null,
         wikipediaLanguage:lang,
-        commercialReady:true,
       },
       sources:["Wikipedia","Wikimedia Commons",entity?"Wikidata":null].filter(Boolean),
       sourceStatus:{
@@ -892,6 +895,59 @@ export async function getWikimediaArticleMediaBatch(entries,{
 
   for(const entry of unresolved){
     if(!(entry.id in output))output[entry.id]=null;
+  }
+
+  return output;
+}
+
+
+export async function getCoverageMediaBatch(entries,{
+  languages=["en","fr","de","es","it","pt"],
+  lang="en",
+}={}){
+  const normalized=[];
+  const seen=new Set();
+
+  for(const entry of Array.isArray(entries)?entries:[]){
+    const id=String(entry?.id??"").trim();
+    const query=String(entry?.query??"").trim();
+    if(!id||!query||seen.has(id))continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      query,
+      rank:String(entry?.rank||""),
+      extinct:Boolean(entry?.extinct),
+    });
+  }
+
+  if(!normalized.length)return {};
+
+  const output={};
+  const wikimedia=await getWikimediaArticleMediaBatch(normalized,{languages});
+  const fallback=[];
+
+  for(const entry of normalized){
+    const value=wikimedia[entry.id]||null;
+    if(value?.media?.imageUrl&&isLikelyPhotographicMedia(value.media)){
+      output[entry.id]=value;
+    }else{
+      fallback.push(entry);
+    }
+  }
+
+  if(fallback.length){
+    const supplemental=await getAuditKnowledgeBatch(fallback,{lang});
+    for(const entry of fallback){
+      const value=supplemental[entry.id]||null;
+      if(value?.media?.imageUrl&&isLikelyPhotographicMedia(value.media)){
+        output[entry.id]=value;
+      }else if(wikimedia[entry.id]?.auditTransientError){
+        output[entry.id]=wikimedia[entry.id];
+      }else{
+        output[entry.id]=value;
+      }
+    }
   }
 
   return output;
