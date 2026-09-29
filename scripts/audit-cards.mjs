@@ -27,6 +27,7 @@ const reportPath=resolve(
   args.get("report")||
   "./data/card-quality-report.json"
 );
+const AUDIT_RESOLVER_VERSION="v2-canonical-wikipedia";
 const statusOnly=args.get("status")==="true";
 const auditAll=args.get("all")==="true";
 const defaultBatch=Math.max(1,Number(process.env.LIFECARDS_AUDIT_BATCH||250));
@@ -104,6 +105,7 @@ quality.exec(`
     wikipedia_url TEXT,
     wikidata_id TEXT,
     ncbi_tax_id TEXT,
+    resolver_version TEXT,
     checked_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS card_quality_status_idx ON card_quality(status);
@@ -113,6 +115,13 @@ quality.exec(`
     value TEXT NOT NULL
   );
 `);
+
+const qualityColumns=new Set(
+  quality.prepare("PRAGMA table_info(card_quality)").all().map(row=>row.name)
+);
+if(!qualityColumns.has("resolver_version")){
+  quality.exec("ALTER TABLE card_quality ADD COLUMN resolver_version TEXT");
+}
 
 try{
   taxonomy.prepare("ATTACH DATABASE ? AS qualitydb").run(qualityPath);
@@ -193,7 +202,11 @@ const rows=taxonomy.prepare(`
     t.status AS taxonomic_status
   FROM drop_pool p
   JOIN taxa t ON t.id=p.taxon_id
-  WHERE p.taxon_id NOT IN (SELECT taxon_id FROM qualitydb.card_quality)
+  WHERE p.taxon_id NOT IN (
+    SELECT taxon_id
+    FROM qualitydb.card_quality
+    WHERE resolver_version = ?
+  )
   ORDER BY
     CASE p.rarity
       WHEN 'MYTHIC' THEN 1
@@ -206,7 +219,7 @@ const rows=taxonomy.prepare(`
     END,
     p.slot
   LIMIT ?
-`).all(limit);
+`).all(AUDIT_RESOLVER_VERSION,limit);
 
 if(!rows.length){
   printStats("Nothing left to audit");
@@ -219,9 +232,9 @@ const upsert=quality.prepare(`
   INSERT INTO card_quality(
     taxon_id,scientific_name,common_name,rank,rarity,status,reason,
     media_url,media_source,media_resolver,media_confidence,
-    media_creator,media_license,wikipedia_url,wikidata_id,ncbi_tax_id,checked_at
+    media_creator,media_license,wikipedia_url,wikidata_id,ncbi_tax_id,resolver_version,checked_at
   )
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   ON CONFLICT(taxon_id) DO UPDATE SET
     scientific_name=excluded.scientific_name,
     common_name=excluded.common_name,
@@ -238,6 +251,7 @@ const upsert=quality.prepare(`
     wikipedia_url=excluded.wikipedia_url,
     wikidata_id=excluded.wikidata_id,
     ncbi_tax_id=excluded.ncbi_tax_id,
+    resolver_version=excluded.resolver_version,
     checked_at=excluded.checked_at
 `);
 
@@ -281,7 +295,8 @@ async function worker(){
     let classification=null;
 
     try{
-      knowledge=await getKnowledge(row.scientific_name,{lang:"en"});
+      const imageQuery=String(row.canonical_name||row.scientific_name||"").trim();
+      knowledge=await getKnowledge(imageQuery,{lang:"en"});
       classification=classify(row,knowledge);
     }catch(error){
       classification={status:"ERROR",reason:String(error?.message||error)};
@@ -305,12 +320,13 @@ async function worker(){
       knowledge?.wikipedia?.pageUrl||null,
       knowledge?.wikidata?.id||null,
       knowledge?.taxonomy?.ncbiTaxId||null,
+      AUDIT_RESOLVER_VERSION,
       Date.now()
     );
 
     processed+=1;
     console.log(
-      `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${row.scientific_name} · ${media?.resolver||"no-media"}`
+      `[${processed}/${rows.length}] ${classification.status.padEnd(8)} · ${row.canonical_name||row.scientific_name} · ${media?.resolver||"no-media"}`
     );
   }
 }
