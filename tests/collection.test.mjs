@@ -35,6 +35,8 @@ test("state returns only recent cards while collection summary remains complete"
   const state = database.getState("collector", config());
   assert.equal(state.collectionSummary.totalCards, 18);
   assert.ok(state.inventory.length <= 12);
+  assert.equal("market" in state, false);
+  assert.equal("supplies" in state, false);
 });
 
 test("collection discoveries are grouped and paginated server-side", () => {
@@ -72,4 +74,38 @@ test("visible tree ownership lookup returns only requested scientific names", ()
   const result = database.ownedScientificNames("collector", [ownedName, "Definitely not owned"]);
 
   assert.deepEqual(result, [ownedName]);
+});
+
+
+test("market listings are paginated outside global state", () => {
+  const page = database.listCollectionPage("collector", {
+    mode: "CARDS",
+    limit: 1,
+  });
+  const card = page.items[0];
+  const listing = database.createListing("collector", card.id, 1234);
+
+  assert.equal(listing.price, 1234);
+
+  const market = database.listMarketPage({
+    filter: "ALL",
+    limit: 1,
+    offset: 0,
+  });
+  assert.equal(market.items.length, 1);
+  assert.ok(market.total >= 1);
+  assert.equal(market.items[0].id, listing.id);
+});
+
+test("edition supply is fetched per definition instead of through global state", () => {
+  const page = database.listCollectionPage("collector", {
+    mode: "CARDS",
+    limit: 1,
+  });
+  const definitionId = page.items[0].definitionId;
+  const supplies = database.getDefinitionSupplies(definitionId);
+
+  assert.ok(Array.isArray(supplies));
+  assert.ok(supplies.length >= 1);
+  assert.ok(supplies.every((entry) => entry.definitionId === definitionId));
 });
