@@ -11,3 +11,7 @@ coverage/
 data/*.sqlite
 data/*.sqlite-*
 data/*.zip
+
+data/card-quality.sqlite
+data/card-quality.sqlite-*
+data/card-quality-report.json
