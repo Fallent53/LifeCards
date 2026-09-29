@@ -2372,3 +2372,171 @@ dialog{border:0;padding:0;background:transparent;color:var(--ink)}dialog::backdr
   .drop-storage-panel{grid-column:auto}
   .premium-recent{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
 }
+
+
+.market-scope-tabs{
+  display:flex;
+  gap:5px;
+  width:max-content;
+  margin:-5px 0 14px;
+  padding:4px;
+  border:1px solid #223b2f;
+  border-radius:12px;
+  background:#08130e;
+}
+.market-scope-tabs button{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  border:0;
+  border-radius:8px;
+  padding:8px 12px;
+  background:transparent;
+  color:#708579;
+  font-size:8px;
+}
+.market-scope-tabs button.active{background:#173425;color:#e6f8ed}
+.market-scope-tabs button i{
+  min-width:17px;
+  padding:2px 5px;
+  border-radius:999px;
+  background:#2d5740;
+  color:#bce6ca;
+  font-size:6px;
+  font-style:normal;
+}
+.market-stat em{
+  display:block;
+  margin-top:5px;
+  color:#6bd993;
+  font-size:7px;
+  font-style:normal;
+}
+.market-item.own-listing{border-color:#365b45}
+.market-item.history-item{opacity:.92}
+.market-status{
+  min-width:62px;
+  padding:7px 8px;
+  border:1px solid #33483d;
+  border-radius:999px;
+  text-align:center;
+  color:#7d9185;
+  font-size:6px;
+  font-weight:800;
+  letter-spacing:.07em;
+}
+.market-status.sold{border-color:#3d6b4d;color:#94d2a9;background:#0f2117}
+.market-status.cancelled{border-color:#554842;color:#aa9388;background:#17120f}
+.market-meta .cancel-listing{
+  border-color:#655044;
+  background:#211711;
+  color:#d0a88f;
+}
+.market-meta .cancel-listing:hover{
+  border-color:#8b6b57;
+  background:#2d1d15;
+}
+
+.record-transfer-history{
+  margin-top:18px;
+  padding-top:16px;
+  border-top:1px solid #213a2d;
+}
+.provenance-loading{
+  margin-top:10px;
+  padding:10px;
+  border:1px dashed #2b4939;
+  border-radius:9px;
+  color:#64796d;
+  font-size:7px;
+}
+.provenance-timeline{
+  position:relative;
+  display:grid;
+  gap:0;
+  margin-top:10px;
+}
+.provenance-timeline:before{
+  content:"";
+  position:absolute;
+  left:4px;
+  top:8px;
+  bottom:8px;
+  width:1px;
+  background:#31513f;
+}
+.provenance-event{
+  position:relative;
+  display:grid;
+  grid-template-columns:10px minmax(0,1fr);
+  gap:8px;
+  padding:0 0 13px;
+}
+.provenance-event>i{
+  position:relative;
+  z-index:2;
+  width:9px;height:9px;
+  margin-top:2px;
+  border:2px solid #0b1812;
+  border-radius:50%;
+  background:#6edb96;
+  box-shadow:0 0 0 1px #4d8e65;
+}
+.provenance-event.sold>i{
+  background:#c4a3f2;
+  box-shadow:0 0 0 1px #785f9a;
+}
+.provenance-event span{
+  display:block;
+  color:#617a6a;
+  font-size:5px;
+  font-weight:800;
+  letter-spacing:.09em;
+}
+.provenance-event b{
+  display:block;
+  margin-top:2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:8px;
+}
+.provenance-event small{
+  display:block;
+  margin-top:2px;
+  color:#52695b;
+  font-size:6px;
+  line-height:1.4;
+}
+.provenance-current{
+  margin-top:2px;
+  padding:10px 11px;
+  border:1px solid #29483a;
+  border-radius:9px;
+  background:#0a1710;
+}
+.provenance-current span{
+  display:block;
+  color:#5d7566;
+  font-size:5px;
+  font-weight:800;
+  letter-spacing:.09em;
+}
+.provenance-current b{
+  display:block;
+  margin-top:2px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:9px;
+}
+.provenance-current small{
+  display:block;
+  margin-top:2px;
+  color:#52695c;
+  font-size:6px;
+}
+@media(max-width:720px){
+  .market-scope-tabs{width:100%;overflow:auto}
+  .market-scope-tabs button{flex:0 0 auto}
+}
