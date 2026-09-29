@@ -46,11 +46,23 @@ function mapRow(row) {
     status: row.status || "accepted",
     extinct: Boolean(row.extinct),
     childCount: Number(row.child_count || 0),
+    descendantSpeciesCount: Number(row.descendant_species_count || (String(row.rank || "").toLowerCase()==="species" ? 1 : 0)),
     kind: String(row.rank || "").toLowerCase() === "species" ? "species" : "taxon",
     source: "Catalogue of Life",
     sourceId: String(row.id),
     gameRarity: row.game_rarity || row.pool_rarity || null,
   };
+}
+
+function seedDescendantSpeciesCount(id, seen = new Set()) {
+  if (seen.has(id)) return 0;
+  seen.add(id);
+  const item = byId.get(id);
+  if (!item) return 0;
+  if (item.kind === "species") return 1;
+  return catalog
+    .filter((entry) => entry.parentId === id)
+    .reduce((sum, child) => sum + seedDescendantSpeciesCount(child.id, new Set(seen)), 0);
 }
 
 function seedDefinition(id) {
@@ -66,6 +78,7 @@ function seedDefinition(id) {
     status: "seed",
     extinct: item.temporalStatus === "extinct",
     childCount: catalog.filter((entry) => entry.parentId === item.id).length,
+    descendantSpeciesCount: seedDescendantSpeciesCount(item.id),
     kind: item.kind,
     source: "LifeCards seed",
     sourceId: item.id,
@@ -130,7 +143,7 @@ export function getTaxon(id) {
   const db = openFullDb();
   if (!db) return seedDefinition(String(id));
   const row = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count,descendant_species_count
     FROM taxa WHERE id = ?
   `).get(String(id));
   return mapRow(row);
@@ -216,7 +229,7 @@ export function searchTaxa(query, limit = 30) {
 
   const prefix = `${q}%`;
   const rows = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count,descendant_species_count
     FROM taxa
     WHERE scientific_name LIKE ? COLLATE NOCASE
        OR canonical_name LIKE ? COLLATE NOCASE
@@ -244,10 +257,10 @@ export function getChildren(id, limit = 120) {
   }
 
   const rows = db.prepare(`
-    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+    SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count,descendant_species_count
     FROM taxa
     WHERE parent_id = ?
-    ORDER BY child_count DESC, rank, scientific_name
+    ORDER BY descendant_species_count DESC, child_count DESC, rank, scientific_name
     LIMIT ?
   `).all(String(id), safeLimit);
   return rows.map(mapRow);
@@ -274,7 +287,7 @@ export function getPath(id, maxDepth = 64) {
   for (let i = 0; i < maxDepth && currentId && !seen.has(currentId); i += 1) {
     seen.add(currentId);
     const row = db.prepare(`
-      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count,descendant_species_count
       FROM taxa WHERE id = ?
     `).get(currentId);
     if (!row) break;
@@ -379,12 +392,12 @@ function getChildrenBatch(parentIds, childLimit) {
     if (!chunk.length) continue;
     const placeholders = chunk.map(() => "?").join(",");
     const rows = db.prepare(`
-      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count
+      SELECT id,parent_id,scientific_name,canonical_name,common_name,rank,status,extinct,child_count,descendant_species_count
       FROM (
         SELECT t.*,
                ROW_NUMBER() OVER (
                  PARTITION BY parent_id
-                 ORDER BY child_count DESC, rank, scientific_name
+                 ORDER BY descendant_species_count DESC, child_count DESC, rank, scientific_name
                ) AS rn
         FROM taxa t
         WHERE parent_id IN (${placeholders})
